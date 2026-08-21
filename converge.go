@@ -45,7 +45,10 @@ func runConverge(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	allocs := ledger.Ensure(cfg.Names(), cfg.Base())
+	allocs, err := ledger.EnsureStrict(cfg.Names(), cfg.Base())
+	if err != nil {
+		return err
+	}
 	// 実体を作る前に保存する。途中で落ちても、次の収束が同じ番号を使う。
 	if err := ledger.Save(cfg.LedgerPath()); err != nil {
 		return err

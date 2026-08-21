@@ -74,11 +74,27 @@ func (l *Ledger) Ensure(names []string, b Base) map[string]Alloc {
 			out[n] = a
 			continue
 		}
-		a := l.allocate(b)
+		a, err := l.allocate(b)
+		if err != nil {
+			// 上限を超えたら配らない。配ると短命ポート帯と衝突して
+			// 静かに bind に失敗する。
+			return out
+		}
 		l.Entries[n] = a
 		out[n] = a
 	}
 	return out
+}
+
+// EnsureStrict は Ensure と同じだが、上限を超えたらエラーを返す。
+func (l *Ledger) EnsureStrict(names []string, b Base) (map[string]Alloc, error) {
+	out := l.Ensure(names, b)
+	for _, n := range names {
+		if _, ok := out[n]; !ok {
+			return nil, fmt.Errorf("割り当ての上限 (%d) に達しました: %s", MaxApps, n)
+		}
+	}
+	return out, nil
 }
 
 // allocate は未使用の最小 index を割り当てる。
@@ -86,7 +102,7 @@ func (l *Ledger) Ensure(names []string, b Base) map[string]Alloc {
 // 消えたアプリの番号は再利用する。番号が無限に増えるのを避けるためだが、
 // 再利用の前に古いユーザとデータが消えている必要がある。converge は宣言から
 // 消えたアプリのユーザを削除しないので、実際には手で消すまで再利用されない。
-func (l *Ledger) allocate(b Base) Alloc {
+func (l *Ledger) allocate(b Base) (Alloc, error) {
 	used := map[int]bool{}
 	for _, a := range l.Entries {
 		used[a.Index] = true
@@ -95,7 +111,10 @@ func (l *Ledger) allocate(b Base) Alloc {
 	for used[i] {
 		i++
 	}
-	return at(i, b)
+	if i >= MaxApps {
+		return Alloc{}, fmt.Errorf("割り当ての上限 (%d) に達しました", MaxApps)
+	}
+	return at(i, b), nil
 }
 
 // Remove は台帳から消す。番号を再利用できるようにする。
