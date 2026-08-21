@@ -112,6 +112,13 @@ func runMigrate(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("schema の適用に失敗しました: %w", err)
 	}
+
+	// 適用が通っただけでは足りない。schema 側が書く GRANT の宛先と、yunirun が
+	// 作るロールの名前が食い違っていても pgschema は成功するので、アプリの
+	// ロールが実際にテーブルを使えるところまで見る。
+	if err := system.VerifyAppGrants(ctx, r, names); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -73,6 +73,17 @@ var assumptions = []Assumption{
 		},
 	},
 	{
+		ID: "pgschema/grants-go-to-the-name-written-in-the-schema",
+		What: "schema に書いた GRANT 先のロール名が実在しなければ、pgschema は" +
+			"そのロールを作ってから GRANT する。宛先が正しいかは見てくれない",
+		Why: "yunirun が作るのは <databaseName> と <databaseName>_app の 2 つで、" +
+			"アプリは後者で接続する。schema 側の GRANT が別の名前を指していても " +
+			"migration は成功するため、アプリのロールは何の権限も持たないまま起動する。" +
+			"健康確認の経路が DB を触らなければ 200 を返し続けるので静かに壊れる。" +
+			"migrate の後に VerifyAppGrants で実際に触れることを確かめる。",
+		// 実際の DB が要るので e2e に任せる。migrate が毎回検査する。
+	},
+	{
 		ID:   "fs/traversal-needs-x-on-every-component",
 		What: "パスの途中に x が無ければ、末端の権限に関係なく届かない",
 		Why: "stateDir を 0700 root にしたため配下のホームへ辿れなかった。" +
