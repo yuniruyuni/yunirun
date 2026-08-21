@@ -75,6 +75,15 @@ pkgs.testers.runNixOSTest {
         after = machine.succeed("cat /var/lib/yunirun/allocations.json")
         assert before == after, "再実行で割り当てが変わった"
 
+    with subtest("前提が実際の環境で成り立っている"):
+        # yunirun は外部システムの挙動に多く依存している。実際に踏んだ不具合の
+        # 大半は「外部の仕様を知らなかった」ことに起因していた。前提を明示して、
+        # それが常識的なシステム構成で成り立つことをここで確かめる。
+        machine.succeed("yunirun doctor")
+        # アプリのユーザとしても検査する。ファイルの到達性や XDG_RUNTIME_DIR は
+        # ユーザによって変わる。
+        machine.succeed("yunirun doctor --app alpha")
+
     with subtest("アプリを足しても既存の割り当てが動かない"):
         # 名前順のインデックスから導出していた頃、アルファベット順で前に入る
         # 名前を足すと既存アプリの uid とポートが全てずれた。稼働中の

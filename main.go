@@ -28,6 +28,8 @@ func main() {
 		err = runDeploy(ctx, os.Args[2:])
 	case "migrate":
 		err = runMigrate(ctx, os.Args[2:])
+	case "doctor":
+		err = runDoctor(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -62,6 +64,11 @@ func usage() {
   yunirun migrate <app>
       schema を適用する。root で実行する。owner ロール (DDL) を使うため、
       deploy ユーザには実行させず systemd 経由で起動される。
+
+  yunirun doctor [--app NAME] [--list]
+      yunirun が置いている前提が今の環境で成り立っているか確かめる。
+      この仕組みは外部システムの挙動に多く依存しており、前提が破れたときに
+      原因の分からない不具合ではなく前提の名前で分かるようにする。
 
 設定の所在:
   /etc/yunirun/config.json   どのリポジトリを取り込むか (システム側)
