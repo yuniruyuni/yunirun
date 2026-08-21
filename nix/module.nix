@@ -30,6 +30,8 @@ let
     pkgs.curl
     pkgs.systemd
     pkgs.shadow
+    # runuser。psql を postgres として実行するのに使う。
+    pkgs.util-linux
     pkgs.coreutils
     pkgs.sudo
     "/run/wrappers"
