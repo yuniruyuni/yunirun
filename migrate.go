@@ -75,6 +75,21 @@ func runMigrate(ctx context.Context, args []string) error {
 	r := system.ExecRunner{}
 
 	fmt.Printf("==> %s:%s で schema を適用\n", image, tag)
+
+	// GHCR は非公開なので pull に認証が要る。deploy が置いたトークンを使う。
+	// このトークンは job の終了とともに失効するので、長期の資格情報にはならない。
+	authfile := filepath.Join(inboxDir(app), "migrate-auth.json")
+	defer os.Remove(authfile)
+	if token, err := os.ReadFile(tokenPath(app)); err == nil {
+		if _, err := r.Run(ctx, token, "podman", "login", "ghcr.io",
+			"--username", owner, "--password-stdin", "--authfile", authfile); err != nil {
+			return fmt.Errorf("ghcr.io にログインできません: %w", err)
+		}
+		if _, err := r.Run(ctx, nil, "podman", "pull", "--authfile", authfile, image+":"+tag); err != nil {
+			return fmt.Errorf("%s を取得できません: %w", image, err)
+		}
+	}
+
 	args2 := []string{
 		"run", "--rm",
 		// owner パスワードは root しか読めないファイルから読む。

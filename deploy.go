@@ -113,6 +113,16 @@ func runDeploy(ctx context.Context, args []string) error {
 		if err := saveTag(cfg, app, tag); err != nil {
 			return err
 		}
+		// root 側の migrate は GHCR の認証情報を持たない (authfile はこの
+		// ユーザの inbox にある)。migration image を pull できるよう、
+		// トークンを受け渡す。
+		//
+		// 置き場所は inbox で、root だけが読めるようにする。deploy ユーザ自身は
+		// 元のトークンを持っているので、ここを読めなくしても何も失わない。
+		if err := saveToken(app, req.Token); err != nil {
+			return err
+		}
+		defer os.Remove(tokenPath(app))
 		if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
 			"systemctl", "start", "yunirun-migrate@"+app+".service"); err != nil {
 			return fmt.Errorf("migration に失敗しました: %w", err)
@@ -208,4 +218,14 @@ func saveManifest(cfg *config.Config, app, content string) error {
 
 func saveTag(_ *config.Config, app, tag string) error {
 	return os.WriteFile(tagPath(app), []byte(tag), 0o644)
+}
+
+func tokenPath(app string) string { return filepath.Join(inboxDir(app), "ghcr-token") }
+
+// saveToken は root 側の migrate へ GHCR のトークンを渡す。
+//
+// 0600 で書くので、このユーザと root だけが読める。job の終了とともに失効する
+// トークンなので、残っても長期の資格情報にはならない。
+func saveToken(app, token string) error {
+	return os.WriteFile(tokenPath(app), []byte(token), 0o600)
 }
