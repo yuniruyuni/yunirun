@@ -118,7 +118,12 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ cfg.package ];
+    # yunirun を手で実行できるようにする。
+    #
+    # 実行時に呼ぶ外部コマンドも一緒に入れる。systemd 経由なら PATH を与えて
+    # いるが、管理者が手で converge を打つ場合はシステムの PATH しか無い。
+    # 実際 VM テストで age-keygen が見つからず落ちた。
+    environment.systemPackages = [ cfg.package pkgs.age pkgs.podman ];
     environment.etc."yunirun/config.json".source = configFile;
 
     # activation のあとに収束させる。
