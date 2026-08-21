@@ -154,6 +154,40 @@ var assumptions = []Assumption{
 		},
 	},
 	{
+		ID:   "haproxy/reload-needs-sigusr2",
+		What: "haproxy の再読込は SIGUSR2 で、-c は検査しかしない",
+		Why: "ExecReload に -c だけを書いていたため、アプリを足しても listen が" +
+			"増えなかった。設定には backend があるのにポートが開かないという" +
+			"分かりにくい状態になる。",
+		Check: func(ctx context.Context, env Env) error {
+			// 設定に書かれた bind が実際に listen されているかを見る。
+			b, err := os.ReadFile("/etc/yunirun/haproxy.cfg")
+			if err != nil {
+				return nil
+			}
+			var want []string
+			for _, line := range strings.Split(string(b), "\n") {
+				f := strings.Fields(line)
+				if len(f) == 2 && f[0] == "bind" {
+					want = append(want, f[1])
+				}
+			}
+			if len(want) == 0 {
+				return nil
+			}
+			out, err := env.Run(ctx, "ss", "-lnt")
+			if err != nil {
+				return nil
+			}
+			for _, w := range want {
+				if !strings.Contains(string(out), w) {
+					return fmt.Errorf("設定にある %s が listen されていない (reload が効いていない)", w)
+				}
+			}
+			return nil
+		},
+	},
+	{
 		ID:   "postgres/root-cannot-use-peer-auth",
 		What: "pg_hba に local all all md5 があると root は peer で入れない",
 		Why: "コンテナから Unix ソケット経由で繋ぐためにこの行が要る。" +
