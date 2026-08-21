@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/yuniruyuni/yunirun/internal/alloc"
 	"github.com/yuniruyuni/yunirun/internal/config"
@@ -112,7 +113,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		return render.App{}, err
 	}
 
-	return render.App{
+	ra := render.App{
 		Name:     name,
 		User:     user,
 		Alloc:    a,
@@ -121,7 +122,63 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		DBName:   names.Database,
 		DBUser:   names.App,
 		EnvFile:  runtimeEnv,
-	}, nil
+	}
+
+	units := map[string]string{}
+	for _, color := range render.Colors {
+		units[fmt.Sprintf("%s-%s.container", name, color)] = render.ContainerUnit(ra, color)
+	}
+	// migration は root 側で実行するので、ここでは unit を作らない。
+	// 作るとアプリのユーザから owner の資格情報へ手が届いてしまう。
+	for wname, w := range m.Workloads {
+		if wname == "migration" {
+			continue
+		}
+		spec := workloadSpec(cfg, name, wname, w, names, migrationEnv, runtimeEnv, repoOwner(cfg, name))
+		units[fmt.Sprintf("%s-%s.container", name, wname)] = render.WorkloadUnit(ra, wname, spec)
+		if w.Schedule != "" {
+			units[fmt.Sprintf("%s-%s.timer", name, wname)] = render.TimerUnit(ra, wname, spec)
+		}
+	}
+	if err := system.WriteUnits(home, a.UID, a.GID, units); err != nil {
+		return render.App{}, err
+	}
+	if err := system.ReloadUserUnits(ctx, r, user, a.UID); err != nil {
+		return render.App{}, err
+	}
+	return ra, nil
+}
+
+// workloadSpec は 1 ワークロードの生成情報を組み立てる。
+//
+// role が owner のものはここへ来ない (migration のみで、root 側が扱う)。
+// 万一来ても app の env ファイルしか渡さないので、owner パスワードは漏れない。
+func workloadSpec(cfg *config.Config, app, name string, w manifest.Workload,
+	n system.DBNames, migrationEnv, runtimeEnv, owner string) render.WorkloadSpec {
+
+	image := w.Image
+	if image == "" {
+		image = app
+	}
+	if !strings.Contains(image, "/") {
+		image = "ghcr.io/" + owner + "/" + image
+	}
+	spec := render.WorkloadSpec{
+		Image:    image + ":current",
+		Args:     w.Args,
+		EnvFile:  runtimeEnv,
+		DBUser:   n.App,
+		Schedule: w.Schedule,
+	}
+	if w.Role == manifest.RoleOwner {
+		spec.EnvFile = migrationEnv
+		spec.DBUser = n.Owner
+	}
+	return spec
+}
+
+func repoOwner(cfg *config.Config, app string) string {
+	return strings.SplitN(cfg.Apps[app], "/", 2)[0]
 }
 
 func ensureDBPasswords(ctx context.Context, v system.Vault, n system.DBNames) (owner, app string, err error) {

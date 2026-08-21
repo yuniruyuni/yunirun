@@ -26,6 +26,8 @@ func main() {
 		err = runConverge(ctx, os.Args[2:])
 	case "deploy":
 		err = runDeploy(ctx, os.Args[2:])
+	case "migrate":
+		err = runMigrate(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -50,6 +52,10 @@ func usage() {
   yunirun deploy <tag> [--app NAME]
       image を取得して blue/green を入れ替える。アプリのユーザで実行する。
       GHCR のトークンを標準入力から受け取る。
+
+  yunirun migrate <app>
+      schema を適用する。root で実行する。owner ロール (DDL) を使うため、
+      deploy ユーザには実行させず systemd 経由で起動される。
 
 設定の所在:
   /etc/yunirun/config.json   どのリポジトリを取り込むか (システム側)

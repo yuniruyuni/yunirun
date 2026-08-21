@@ -124,3 +124,65 @@ func HAProxy(apps []App) string {
 	}
 	return b.String()
 }
+
+// WorkloadUnit はアプリ本体以外のワークロードの .container を組み立てる。
+//
+// 一度だけ走るものなので Restart=always にはしない。
+func WorkloadUnit(a App, name string, w WorkloadSpec) string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+
+	p("[Unit]")
+	p("Description=%s (%s)", a.Name, name)
+	p("")
+	p("[Container]")
+	p("Image=%s", w.Image)
+	if a.DBName != "" {
+		p("Volume=/run/postgresql:/run/postgresql")
+		p("Environment=PGHOST=/run/postgresql")
+		p("Environment=PGPORT=5432")
+		p("Environment=DB_USER=%s", w.DBUser)
+		p("Environment=DB_NAME=%s", a.DBName)
+		p("Environment=DB_APP_NAME=%s", a.DBName)
+	}
+	if w.EnvFile != "" {
+		p("EnvironmentFile=%s", w.EnvFile)
+	}
+	for _, arg := range w.Args {
+		p("Exec=%s", arg)
+	}
+	p("")
+	p("[Service]")
+	p("Type=oneshot")
+	return b.String()
+}
+
+// WorkloadSpec は 1 ワークロード分の生成に必要な情報。
+type WorkloadSpec struct {
+	Image   string
+	Args    []string
+	EnvFile string
+	DBUser  string
+	// Schedule があれば timer を作る。
+	Schedule string
+}
+
+// TimerUnit は定期実行の .timer を組み立てる。
+func TimerUnit(a App, name string, w WorkloadSpec) string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+
+	p("[Unit]")
+	p("Description=%s (%s) の定期実行", a.Name, name)
+	p("")
+	p("[Timer]")
+	p("OnCalendar=%s", w.Schedule)
+	// 停止中に予定時刻を過ぎていたら起動後に一度走らせる。
+	p("Persistent=true")
+	// 同じ時刻に複数のアプリが集中しないよう散らす。
+	p("RandomizedDelaySec=15m")
+	p("")
+	p("[Install]")
+	p("WantedBy=timers.target")
+	return b.String()
+}

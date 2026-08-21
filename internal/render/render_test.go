@@ -97,3 +97,33 @@ func TestHAProxyOrdersAppsDeterministically(t *testing.T) {
 		t.Fatal("名前順になっていない")
 	}
 }
+
+func TestWorkloadUnitIsOneshotNotRestarting(t *testing.T) {
+	got := WorkloadUnit(sample(), "cleanup", WorkloadSpec{Image: "x", DBUser: "fighter_app"})
+	if !strings.Contains(got, "Type=oneshot") {
+		t.Fatalf("oneshot になっていない:\n%s", got)
+	}
+	// 一度だけ走るものを Restart=always にすると回り続ける。
+	if strings.Contains(got, "Restart=always") {
+		t.Fatalf("再起動し続ける設定になっている:\n%s", got)
+	}
+}
+
+func TestWorkloadUnitUsesGivenRoleNotAlwaysOwner(t *testing.T) {
+	got := WorkloadUnit(sample(), "cleanup", WorkloadSpec{Image: "x", DBUser: "fighter_app"})
+	// cleanup が owner で繋ぐと、日次で動くものに DDL 権限が付く。
+	if !strings.Contains(got, "Environment=DB_USER=fighter_app") {
+		t.Fatalf("app ロールで繋いでいない:\n%s", got)
+	}
+}
+
+func TestTimerUnitSchedulesAndCatchesUp(t *testing.T) {
+	got := TimerUnit(sample(), "cleanup", WorkloadSpec{Schedule: "*-*-* 02:23:00"})
+	if !strings.Contains(got, "OnCalendar=*-*-* 02:23:00") {
+		t.Fatalf("スケジュールが入っていない:\n%s", got)
+	}
+	// 停止中に時刻を過ぎた分を落とさない。
+	if !strings.Contains(got, "Persistent=true") {
+		t.Fatalf("Persistent が無い:\n%s", got)
+	}
+}
