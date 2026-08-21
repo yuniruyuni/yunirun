@@ -82,25 +82,6 @@ func runDeploy(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// 受け取ったマニフェストを反映させる。
-	//
-	// unit を書くのは converge の仕事なので、ここで呼ばないと宣言が変わっても
-	// 反映されない。実際、nginx を 80 番で動かすアプリの初回デプロイが、
-	// 既定の 3000 番を publish する古い unit のままで healthy にならなかった。
-	//
-	// deploy ユーザは converge を直接実行できないので systemd 経由で起動する。
-	fmt.Println("==> 宣言を反映")
-	r := system.ExecRunner{}
-	if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
-		"systemctl", "start", "yunirun-converge.service"); err != nil {
-		return fmt.Errorf("宣言を反映できません: %w", err)
-	}
-
-	// converge が unit を書き直したので、割り当ての情報も読み直す。
-	if info, err = loadAppInfo(app); err != nil {
-		return err
-	}
-
 	owner := strings.SplitN(repo, "/", 2)[0]
 	// image 名はアプリ側が宣言できる。既定はアプリ名。
 	image := imageRef(owner, app, m.App.Image)
@@ -109,61 +90,108 @@ func runDeploy(ctx context.Context, args []string) error {
 	// root 所有で、秘密の env ファイルが入っているため開けない。
 	authfile := filepath.Join(inboxDir(app), "ghcr-auth.json")
 	defer os.Remove(authfile)
-	fmt.Println("==> ghcr.io にログイン")
-	if _, err := r.Run(ctx, []byte(req.Token), "podman", "login", "ghcr.io",
-		"--username", owner, "--password-stdin", "--authfile", authfile); err != nil {
-		return err
-	}
 
-	fmt.Printf("==> %s:%s を取得\n", image, tag)
-	if _, err := r.Run(ctx, nil, "podman", "pull", "--authfile", authfile, image+":"+tag); err != nil {
-		return err
-	}
-	if _, err := r.Run(ctx, nil, "podman", "tag", image+":"+tag, "localhost/"+app+":current"); err != nil {
-		return err
-	}
+	r := system.ExecRunner{}
+	_, hasMigrate := m.Workloads["migration"]
 
-	if _, has := m.Workloads["migration"]; has {
-		// migration は owner パスワード (DDL) を使うので、この非特権ユーザでは
-		// 実行しない。root 側の unit に依頼する。deploy ユーザは起動できるが
-		// owner パスワードを読めない。
-		fmt.Println("==> schema を適用 (root 側で実行)")
-		if err := saveTag(cfg, app, tag); err != nil {
+	// 手順は PlanSteps が決める。順序の契約はそちらでテストしてある。
+	for _, step := range PlanSteps(PlanInput{
+		App: app, Tag: tag, Image: image,
+		Colors: render.Colors, HasMigrate: hasMigrate,
+	}) {
+		fmt.Printf("==> %s\n", step)
+		if err := runStep(ctx, r, step, stepCtx{
+			app: app, tag: tag, image: image, owner: owner,
+			token: req.Token, authfile: authfile, cfg: cfg,
+			health: m.App.Health, info: &info,
+		}); err != nil {
 			return err
-		}
-		// root 側の migrate は GHCR の認証情報を持たない (authfile はこの
-		// ユーザの inbox にある)。migration image を pull できるよう、
-		// トークンを受け渡す。
-		//
-		// 置き場所は inbox で、root だけが読めるようにする。deploy ユーザ自身は
-		// 元のトークンを持っているので、ここを読めなくしても何も失わない。
-		if err := saveToken(app, req.Token); err != nil {
-			return err
-		}
-		defer os.Remove(tokenPath(app))
-		if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
-			"systemctl", "start", "yunirun-migrate@"+app+".service"); err != nil {
-			return fmt.Errorf("migration に失敗しました: %w", err)
-		}
-	}
-
-	// 片方ずつ入れ替える。落としている間はもう片方が受けるので停止しない。
-	for _, color := range render.Colors {
-		unit := fmt.Sprintf("%s-%s.service", app, color)
-		fmt.Printf("==> %s を再起動\n", color)
-		if _, err := r.Run(ctx, nil, "systemctl", "--user", "restart", unit); err != nil {
-			return err
-		}
-		port := info.Blue
-		if color == "green" {
-			port = info.Green
-		}
-		if err := waitHealthy(ctx, port, m.App.Health); err != nil {
-			// 片側が上がらない時点で止める。もう片方はまだ旧版のまま動いている。
-			return fmt.Errorf("%s が healthy になりません: %w", color, err)
 		}
 	}
 	fmt.Printf("==> 完了: %s:%s\n", image, tag)
+	return nil
+}
+
+// stepCtx は各手順が必要とするもの。
+type stepCtx struct {
+	app, tag, image, owner, token, authfile, health string
+	cfg                                             *config.Config
+	info                                            **AppInfo
+}
+
+// runStep は 1 手順を実行する。並びは PlanSteps が決める。
+func runStep(ctx context.Context, r system.Runner, step string, c stepCtx) error {
+	switch {
+	case step == StepApplyManifest:
+		// unit を書くのは converge の仕事。deploy ユーザは直接実行できないので
+		// systemd 経由で起動する。
+		if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
+			"systemctl", "start", "yunirun-converge.service"); err != nil {
+			return fmt.Errorf("宣言を反映できません: %w", err)
+		}
+		// converge が unit を書き直したので割り当ても読み直す。
+		info, err := loadAppInfo(c.app)
+		if err != nil {
+			return err
+		}
+		*c.info = info
+		return nil
+
+	case step == StepLogin:
+		_, err := r.Run(ctx, []byte(c.token), "podman", "login", "ghcr.io",
+			"--username", c.owner, "--password-stdin", "--authfile", c.authfile)
+		return err
+
+	case step == StepPull:
+		if _, err := r.Run(ctx, nil, "podman", "pull", "--authfile", c.authfile, c.image+":"+c.tag); err != nil {
+			return err
+		}
+		_, err := r.Run(ctx, nil, "podman", "tag", c.image+":"+c.tag, "localhost/"+c.app+":current")
+		return err
+
+	case step == StepMigrate:
+		return runMigrateStep(ctx, r, c)
+
+	case strings.Contains(step, StepRestart):
+		color := strings.Fields(step)[0]
+		_, err := r.Run(ctx, nil, "systemctl", "--user", "restart",
+			fmt.Sprintf("%s-%s.service", c.app, color))
+		return err
+
+	case strings.Contains(step, StepWaitHealthy):
+		color := strings.Fields(step)[0]
+		port := (*c.info).Blue
+		if color == "green" {
+			port = (*c.info).Green
+		}
+		if err := waitHealthy(ctx, port, c.health); err != nil {
+			// 片側が上がらない時点で止める。もう片方はまだ旧版のまま動いている。
+			return fmt.Errorf("%s が healthy になりません: %w", color, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("未知の手順: %s", step)
+}
+
+func runMigrateStep(ctx context.Context, r system.Runner, c stepCtx) error {
+	// migration は owner パスワード (DDL) を使うので、この非特権ユーザでは
+	// 実行しない。root 側の unit に依頼する。deploy ユーザは起動できるが
+	// owner パスワードを読めない。
+	if err := saveTag(c.cfg, c.app, c.tag); err != nil {
+		return err
+	}
+	// root 側の migrate は GHCR の認証情報を持たない (authfile はこのユーザの
+	// inbox にある) ので、トークンを受け渡す。root だけが読める形にする。
+	// job の終了とともに失効するので長期の資格情報にはならない。
+	if err := saveToken(c.app, c.token); err != nil {
+		return err
+	}
+	defer os.Remove(tokenPath(c.app))
+
+	if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
+		"systemctl", "start", "yunirun-migrate@"+c.app+".service"); err != nil {
+		return fmt.Errorf("migration に失敗しました: %w", err)
+	}
 	return nil
 }
 
