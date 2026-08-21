@@ -34,11 +34,24 @@ func runConverge(ctx context.Context, args []string) error {
 		return err
 	}
 	r := system.ExecRunner{}
-	allocs := cfg.Allocs()
 
-	hostRecipient, err := hostAgeRecipient(ctx, r, cfg)
+	// 割り当ては台帳から取る。名前順のインデックスから導出すると、アルファベット順で
+	// 前に入る名前を足したときに既存アプリの uid とポートがずれる。稼働中の
+	// コンテナは旧ポートのままで HAProxy は新ポートを見るため停止し、ファイルの
+	// 所有者 uid も実ユーザとずれてデータが読めなくなる。
+	ledger, err := alloc.LoadLedger(cfg.LedgerPath())
 	if err != nil {
 		return err
+	}
+	allocs := ledger.Ensure(cfg.Names(), cfg.Base())
+	// 実体を作る前に保存する。途中で落ちても、次の収束が同じ番号を使う。
+	if err := ledger.Save(cfg.LedgerPath()); err != nil {
+		return err
+	}
+
+	hostRecipient, err2 := hostAgeRecipient(ctx, r, cfg)
+	if err2 != nil {
+		return err2
 	}
 
 	var apps []render.App

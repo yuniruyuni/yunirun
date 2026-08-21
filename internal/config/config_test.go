@@ -47,9 +47,12 @@ func TestHostnameAndAllocs(t *testing.T) {
 	if got := c.Hostname("web"); got != "web.example.com" {
 		t.Fatalf("Hostname = %q", got)
 	}
-	a := c.Allocs()
-	if a["costume"].Index != 0 || a["web"].Index != 1 {
-		t.Fatalf("名前順になっていない: %+v", a)
+	a, err := c.Allocs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a["costume"].Index == a["web"].Index {
+		t.Fatalf("番号が重複している: %+v", a)
 	}
 }
 
@@ -59,7 +62,11 @@ func TestAllocsHonorsCustomBases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := c.Allocs()["web"]
+	all, err := c.Allocs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := all["web"]
 	if a.Frontend != 8200 || a.UID != 7000 {
 		t.Fatalf("基準値が効いていない: %+v", a)
 	}

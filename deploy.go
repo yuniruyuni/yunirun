@@ -61,6 +61,15 @@ func runDeploy(ctx context.Context, args []string) error {
 		return fmt.Errorf("%s は取り込まれていません", app)
 	}
 
+	allocs, err := cfg.Allocs()
+	if err != nil {
+		return err
+	}
+	a, ok := allocs[app]
+	if !ok {
+		return fmt.Errorf("%s の割り当てがありません", app)
+	}
+
 	var req Request
 	if err := json.NewDecoder(io.LimitReader(os.Stdin, 1<<20)).Decode(&req); err != nil {
 		return fmt.Errorf("標準入力を読めません: %w", err)
@@ -116,9 +125,9 @@ func runDeploy(ctx context.Context, args []string) error {
 		if _, err := r.Run(ctx, nil, "systemctl", "--user", "restart", unit); err != nil {
 			return err
 		}
-		port := cfg.Allocs()[app].Blue
+		port := a.Blue
 		if color == "green" {
-			port = cfg.Allocs()[app].Green
+			port = a.Green
 		}
 		if err := waitHealthy(ctx, port, m.App.Health); err != nil {
 			// 片側が上がらない時点で止める。もう片方はまだ旧版のまま動いている。

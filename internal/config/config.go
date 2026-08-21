@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 
@@ -89,8 +90,8 @@ func (c *Config) Names() []string {
 	return out
 }
 
-// Allocs はホスト側資源の割り当てを返す。
-func (c *Config) Allocs() map[string]alloc.Alloc {
+// Base は割り当ての起点を返す。
+func (c *Config) Base() alloc.Base {
 	b := alloc.DefaultBase()
 	if c.BasePort != 0 {
 		b.Port = c.BasePort
@@ -98,7 +99,24 @@ func (c *Config) Allocs() map[string]alloc.Alloc {
 	if c.BaseUID != 0 {
 		b.UID = c.BaseUID
 	}
-	return alloc.For(c.Names(), b)
+	return b
+}
+
+// LedgerPath は割り当て台帳の位置を返す。
+func (c *Config) LedgerPath() string {
+	return filepath.Join(c.StateDir, "allocations.json")
+}
+
+// Allocs は台帳に基づく割り当てを返す。
+//
+// 台帳が無いアプリには新しい番号を振るが、ここでは保存しない。保存は converge が
+// 行う。deploy 側から呼んだときに台帳を書き換えてしまわないようにするため。
+func (c *Config) Allocs() (map[string]alloc.Alloc, error) {
+	l, err := alloc.LoadLedger(c.LedgerPath())
+	if err != nil {
+		return nil, err
+	}
+	return l.Ensure(c.Names(), c.Base()), nil
 }
 
 // Hostname はアプリの公開ホスト名を返す。

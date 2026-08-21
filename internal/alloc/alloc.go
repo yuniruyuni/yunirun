@@ -54,12 +54,26 @@ func DefaultBase() Base {
 	return Base{UID: 6000, Port: 8100, PortStride: 10, SubUID: 4000000}
 }
 
-// For は名前順に並べた apps に対する割り当てを返す。
+// at は index に対応する割り当てを返す。
 //
-// 名前順に固定するので、アプリを足しても既存アプリの番号は動かない…わけでは
-// ない点に注意。アルファベット順で間に入る名前を足すと後ろがずれる。ずれても
-// converge が追従できるよう、番号に依存する状態 (unit ファイル等) は毎回
-// 生成し直す前提にしてある。
+// 割り当ての実体は Ledger 側にある。ここは index から番号を作る計算だけを持つ。
+func at(i int, b Base) Alloc {
+	front := b.Port + i*b.PortStride
+	return Alloc{
+		Index:    i,
+		UID:      b.UID + i,
+		GID:      b.UID + i,
+		Frontend: front,
+		Blue:     front + 1,
+		Green:    front + 2,
+		SubUID:   b.SubUID + i*SubUIDSize,
+	}
+}
+
+// For は index を名前順に振った割り当てを返す。台帳を持たない場面での参照用。
+//
+// 運用では使わない。アプリを追加すると既存の番号がずれるため。Ledger.Ensure を
+// 使うこと。
 func For(names []string, b Base) map[string]Alloc {
 	sorted := make([]string, len(names))
 	copy(sorted, names)
@@ -67,16 +81,7 @@ func For(names []string, b Base) map[string]Alloc {
 
 	out := make(map[string]Alloc, len(sorted))
 	for i, n := range sorted {
-		front := b.Port + i*b.PortStride
-		out[n] = Alloc{
-			Index:    i,
-			UID:      b.UID + i,
-			GID:      b.UID + i,
-			Frontend: front,
-			Blue:     front + 1,
-			Green:    front + 2,
-			SubUID:   b.SubUID + i*SubUIDSize,
-		}
+		out[n] = at(i, b)
 	}
 	return out
 }
