@@ -18,6 +18,21 @@
       # yunirun 自体は NixOS に依存しないので、このモジュールは配線でしかない。
       nixosModules.default = import ./nix/module.nix self;
 
+      # 実際の NixOS を VM で起動して確かめる e2e。
+      #
+      # 単体テストでは押さえられない部分 —— systemd・PostgreSQL・podman が
+      # 揃った環境でしか起きない事柄 —— を検証する。これまで本番で踏んだ
+      # 問題の多くはこの層にあった。
+      #
+      # KVM が要るので x86_64-linux だけに絞る。GitHub Actions のランナーには
+      # /dev/kvm がある。
+      checks.x86_64-linux = {
+        converge = import ./nix/tests/converge.nix {
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+          inherit self;
+        };
+      };
+
       devShells = forAll (pkgs: {
         default = pkgs.mkShell { packages = [ pkgs.go pkgs.gopls ]; };
       });

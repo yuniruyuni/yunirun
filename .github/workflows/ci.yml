@@ -1,0 +1,52 @@
+# yunirun の CI
+#
+# 単体テストに加えて、実際の NixOS を VM で起動する e2e を回す。単体テストでは
+# 押さえられない部分 —— systemd・PostgreSQL・podman が揃った環境でしか起きない
+# 事柄 —— を検証するためで、これまで本番で踏んだ問題の多くはこの層にあった。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: 単体テスト
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: gofmt -l . | tee /dev/stderr | (! read)
+      - run: go vet ./...
+      - run: go test ./...
+
+  e2e:
+    name: e2e (NixOS VM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-25.11
+
+      - name: KVM を使えるようにする
+        # nixosTest は qemu で VM を起動する。KVM が無いとソフトウェア
+        # エミュレーションになって現実的な時間で終わらない。
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq acl
+          sudo setfacl -m u:$USER:rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm && echo "KVM 利用可"
+
+      - name: converge の e2e
+        run: nix build .#checks.x86_64-linux.converge -L

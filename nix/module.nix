@@ -129,7 +129,9 @@ in
       description = "yunirun: 宣言されたアプリ一覧に実体を一致させる";
       wantedBy = [ "multi-user.target" ];
       after = [ "postgresql.service" "network-online.target" ];
-      wants = [ "postgresql.service" ];
+      # network-online は after だけでなく wants も要る。順序だけ指定しても
+      # target 自体が起動しないので、依存として宣言していないと警告になる。
+      wants = [ "postgresql.service" "network-online.target" ];
       restartTriggers = [ configFile ];
       path = [ cfg.package ];
       environment.PATH = lib.mkForce runtimePath;
