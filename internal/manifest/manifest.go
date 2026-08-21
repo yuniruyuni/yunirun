@@ -58,6 +58,17 @@ type App struct {
 	// 書かなくてよい。
 	DatabaseName string `json:"databaseName"`
 
+	// DatabasePasswords は既存の DB パスワードを持つ秘密の名前。
+	// { "owner": "db-password-x", "app": "db-password-x_app" } の形。
+	//
+	// 指定すると yunirun はパスワードを生成せず、この秘密の値をそのまま使う。
+	// 既存の DB を旧システムと並行して使う間、パスワードを変えると旧側の
+	// 稼働中コンテナが即座に認証に失敗するため。
+	//
+	// 移行が済んだら外してよい。外すと次の収束で yunirun が生成した値に
+	// 切り替わる (そのときは全コンテナが再起動される前提)。
+	DatabasePasswords map[string]string `json:"databasePasswords"`
+
 	// Database はこのアプリが PostgreSQL を使うか。
 	//
 	// 使わないアプリに DB とロールを作ると、消し忘れた資源が溜まるうえ
@@ -126,6 +137,14 @@ func (m *Manifest) validate() error {
 	if m.App.DatabaseName != "" && !dbNameRE.MatchString(m.App.DatabaseName) {
 		// DB 名は SQL とファイルパスの両方に現れる。
 		return fmt.Errorf("DB 名に使えない文字が含まれています: %q", m.App.DatabaseName)
+	}
+	for role, secret := range m.App.DatabasePasswords {
+		if role != RoleOwner && role != RoleApp {
+			return fmt.Errorf("databasePasswords の鍵は owner か app です: %q", role)
+		}
+		if !secretRE.MatchString(secret) {
+			return fmt.Errorf("秘密の名前に使えない文字が含まれています: %q", secret)
+		}
 	}
 	for env, secret := range m.App.Secrets {
 		// 環境変数名は unit ファイルへ書き出す。

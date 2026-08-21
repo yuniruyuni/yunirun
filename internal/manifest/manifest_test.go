@@ -186,3 +186,31 @@ func TestDatabaseNameRejectsUnsafeCharacters(t *testing.T) {
 		}
 	}
 }
+
+// 移行期間中に旧システムと DB を共有する場合、パスワードを変えると旧側の
+// 稼働中コンテナが即座に認証に失敗する。既存の秘密を指定できる必要がある。
+func TestExistingDatabasePasswordsCanBeReused(t *testing.T) {
+	m, err := Parse([]byte(`{"app":{"database":true,"databasePasswords":{"owner":"db-password-x","app":"db-password-x_app"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.App.DatabasePasswords[RoleOwner] != "db-password-x" {
+		t.Fatalf("owner の指定が読めていない: %+v", m.App.DatabasePasswords)
+	}
+	if m.App.DatabasePasswords[RoleApp] != "db-password-x_app" {
+		t.Fatalf("app の指定が読めていない: %+v", m.App.DatabasePasswords)
+	}
+}
+
+func TestDatabasePasswordsRejectsUnknownRole(t *testing.T) {
+	// 綴り違いを黙って無視すると、生成した値で上書きされて旧側が止まる。
+	if _, err := Parse([]byte(`{"app":{"databasePasswords":{"onwer":"x"}}}`)); err == nil {
+		t.Fatal("未知のロールを受け入れてしまった")
+	}
+}
+
+func TestDatabasePasswordsRejectsUnsafeSecretName(t *testing.T) {
+	if _, err := Parse([]byte(`{"app":{"databasePasswords":{"owner":"../../etc/shadow"}}}`)); err == nil {
+		t.Fatal("パスを抜ける名前を受け入れてしまった")
+	}
+}
