@@ -125,8 +125,14 @@ func runStep(ctx context.Context, r system.Runner, step string, c stepCtx) error
 	case step == StepApplyManifest:
 		// unit を書くのは converge の仕事。deploy ユーザは直接実行できないので
 		// systemd 経由で起動する。
+		//
+		// start ではなく restart を使う。converge は RemainAfterExit=yes なので
+		// 一度成功すると active (exited) のまま留まり、既に active な unit への
+		// start は黙って何もしない。start にしていたところ、デプロイは
+		// 「宣言を反映」と表示しながら実際には収束せず、マニフェストの変更が
+		// 一切効かなくなっていた。
 		if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
-			"systemctl", "start", "yunirun-converge.service"); err != nil {
+			"systemctl", "restart", "yunirun-converge.service"); err != nil {
 			return fmt.Errorf("宣言を反映できません: %w", err)
 		}
 		// converge が unit を書き直したので割り当ても読み直す。
@@ -189,6 +195,9 @@ func runMigrateStep(ctx context.Context, r system.Runner, c stepCtx) error {
 	defer os.Remove(tokenPath(c.app))
 
 	if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
+		// こちらは start のままでよい。migrate は RemainAfterExit を持たないので
+		// 毎回 inactive に戻り、start がその都度実行される。むしろ restart は
+		// 実行中の migration を DDL の途中で殺しうるので使わない。
 		"systemctl", "start", "yunirun-migrate@"+c.app+".service"); err != nil {
 		return fmt.Errorf("migration に失敗しました: %w", err)
 	}
