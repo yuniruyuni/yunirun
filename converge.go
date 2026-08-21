@@ -120,7 +120,13 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	name string, a alloc.Alloc, hostRecipient string) (render.App, error) {
 
 	user := alloc.User(name)
-	home := filepath.Join(cfg.StateDir, "home", name)
+	// ホームは stateDir の外に置く。
+	//
+	// stateDir には台帳と秘密が入るので 0700 root にしておきたいが、そうすると
+	// その配下は何であれアプリのユーザから辿れない (パスの途中に x が無いと、
+	// 末端の権限に関係なく届かない。エラーは "Not a directory" という誤解を
+	// 招く形で出る)。
+	home := filepath.Join(cfg.HomeDir(), name)
 
 	if err := system.EnsureUser(ctx, r, user, a, home); err != nil {
 		return render.App{}, err

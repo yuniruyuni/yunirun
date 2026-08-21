@@ -33,6 +33,9 @@ type Config struct {
 	// Apps はアプリ名からリポジトリ (owner/name) への対応。
 	Apps map[string]string `json:"apps"`
 
+	// HomesDir はアプリのホームを置く場所。空なら既定値。
+	HomesDir string `json:"homesDir"`
+
 	// BasePort と BaseUID は割り当ての起点。既存の仕組みと並行して動かす間、
 	// 帯を重ねないために外から指定できるようにしてある。0 なら既定値。
 	BasePort int `json:"basePort"`
@@ -100,6 +103,17 @@ func (c *Config) Base() alloc.Base {
 		b.UID = c.BaseUID
 	}
 	return b
+}
+
+// HomeDir はアプリのホームを置く場所を返す。
+//
+// stateDir の外に置く。stateDir は台帳と秘密のために root 専用にしておきたいが、
+// パスの途中が辿れないと配下のホームへも届かないため。
+func (c *Config) HomeDir() string {
+	if c.HomesDir != "" {
+		return c.HomesDir
+	}
+	return "/var/lib/yunirun-apps"
 }
 
 // LedgerPath は割り当て台帳の位置を返す。

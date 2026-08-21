@@ -16,7 +16,14 @@ import (
 // NixOS の users.users を使わず imperative に作るのは、yunirun を NixOS に
 // 依存させないため。mutableUsers の既定が true なので rebuild でも消えない。
 func EnsureUser(ctx context.Context, r Runner, name string, a alloc.Alloc, home string) error {
-	if _, err := user.Lookup(name); err == nil {
+	if u, err := user.Lookup(name); err == nil {
+		// ホームの場所が変わったら追従する。既存ユーザを作り直すと uid が
+		// 変わってファイルの所有者がずれるので、変更だけを当てる。
+		if u.HomeDir != home {
+			if _, err := r.Run(ctx, nil, "usermod", "--home", home, "--move-home", name); err != nil {
+				return fmt.Errorf("%s のホームを %s へ移せません: %w", name, home, err)
+			}
+		}
 		return nil
 	}
 	// グループを先に作る。uid と同じ番号にして、他ユーザとグループを共有しない。

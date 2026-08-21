@@ -18,6 +18,7 @@ let
   configFile = pkgs.writeText "yunirun-config.json" (builtins.toJSON {
     inherit (cfg) domain adminRecipient hostKeyPath basePort baseUID;
     stateDir = cfg.stateDir;
+    homesDir = cfg.homesDir;
     apps = cfg.apps;
   });
 
@@ -73,6 +74,17 @@ in
       description = ''
         生成した秘密を復号できる管理者の age 公開鍵。
         ホストを失ったときの復旧経路になるので設定を強く勧める。
+      '';
+    };
+
+    homesDir = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/yunirun-apps";
+      description = ''
+        アプリのホームを置く場所。stateDir の外に置く。
+
+        stateDir は台帳と秘密のために root 専用 (0700) にしてあり、パスの途中が
+        辿れないと配下のホームへもアプリのユーザから届かないため。
       '';
     };
 
@@ -178,9 +190,8 @@ in
     systemd.tmpfiles.rules = [
       # stateDir には台帳と秘密が入るので root 専用。
       "d ${cfg.stateDir} 0700 root root -"
-      # home はアプリのユーザが自分のディレクトリへ辿れる必要があるので開ける。
-      # 各アプリのホーム自体は 0700 でユーザ所有になる。
-      "d ${cfg.stateDir}/home 0755 root root -"
+      # ホームは stateDir の外。各アプリのホーム自体は 0700 でユーザ所有になる。
+      "d ${cfg.homesDir} 0755 root root -"
       "d /run/yunirun 0755 root root -"
     ];
   };
