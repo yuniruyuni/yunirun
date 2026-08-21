@@ -16,7 +16,7 @@ let
   pkg = self.packages.${pkgs.stdenv.hostPlatform.system}.yunirun;
 
   configFile = pkgs.writeText "yunirun-config.json" (builtins.toJSON {
-    inherit (cfg) domain adminRecipient hostKeyPath;
+    inherit (cfg) domain adminRecipient hostKeyPath basePort baseUID;
     stateDir = cfg.stateDir;
     apps = cfg.apps;
   });
@@ -72,6 +72,21 @@ in
         生成した秘密を復号できる管理者の age 公開鍵。
         ホストを失ったときの復旧経路になるので設定を強く勧める。
       '';
+    };
+
+    basePort = lib.mkOption {
+      type = lib.types.int;
+      default = 0;
+      description = ''
+        ホストポート割り当ての起点。0 なら既定値 (8100)。
+        既存の仕組みと並行して動かす間、帯を重ねないために使う。
+      '';
+    };
+
+    baseUID = lib.mkOption {
+      type = lib.types.int;
+      default = 0;
+      description = "uid/gid 割り当ての起点。0 なら既定値 (6000)。";
     };
 
     apps = lib.mkOption {

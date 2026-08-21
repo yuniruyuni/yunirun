@@ -52,3 +52,15 @@ func TestHostnameAndAllocs(t *testing.T) {
 		t.Fatalf("名前順になっていない: %+v", a)
 	}
 }
+
+// 既存の仕組みと並行して動かす間、ポート帯が重なると片方が bind に失敗する。
+func TestAllocsHonorsCustomBases(t *testing.T) {
+	c, err := parse(t, `{"domain":"e.com","stateDir":"/s","basePort":8200,"baseUID":7000,"apps":{"web":"o/w"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.Allocs()["web"]
+	if a.Frontend != 8200 || a.UID != 7000 {
+		t.Fatalf("基準値が効いていない: %+v", a)
+	}
+}

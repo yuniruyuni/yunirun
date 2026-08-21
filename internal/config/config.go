@@ -31,6 +31,11 @@ type Config struct {
 	HostKeyPath string `json:"hostKeyPath"`
 	// Apps はアプリ名からリポジトリ (owner/name) への対応。
 	Apps map[string]string `json:"apps"`
+
+	// BasePort と BaseUID は割り当ての起点。既存の仕組みと並行して動かす間、
+	// 帯を重ねないために外から指定できるようにしてある。0 なら既定値。
+	BasePort int `json:"basePort"`
+	BaseUID  int `json:"baseUID"`
 }
 
 var (
@@ -86,7 +91,14 @@ func (c *Config) Names() []string {
 
 // Allocs はホスト側資源の割り当てを返す。
 func (c *Config) Allocs() map[string]alloc.Alloc {
-	return alloc.For(c.Names(), alloc.DefaultBase())
+	b := alloc.DefaultBase()
+	if c.BasePort != 0 {
+		b.Port = c.BasePort
+	}
+	if c.BaseUID != 0 {
+		b.UID = c.BaseUID
+	}
+	return alloc.For(c.Names(), b)
 }
 
 // Hostname はアプリの公開ホスト名を返す。
