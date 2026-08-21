@@ -1,0 +1,128 @@
+// Package manifest は、アプリリポジトリが置く yunirun.jsonc を読む。
+//
+// このファイルに書くのは「アプリだけが知っていること」に限る。ホスト側の
+// ポートや uid、DB 名やロール名は yunirun が名前から導出するので現れない。
+// 多くのアプリは既定値で足りるため、ファイル自体が存在しないのが普通。
+package manifest
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"regexp"
+
+	"github.com/tidwall/jsonc"
+)
+
+// DefaultPort と DefaultHealth は、宣言が無いときに使う規約。
+const (
+	DefaultPort   = 3000
+	DefaultHealth = "/health"
+)
+
+// Manifest は yunirun.jsonc の内容。
+type Manifest struct {
+	App       App                 `json:"app"`
+	Workloads map[string]Workload `json:"workloads"`
+}
+
+// App はアプリ本体の性質。
+type App struct {
+	// Port はコンテナ内で listen するポート。yunirun は PORT 環境変数でも
+	// 同じ値を渡すので、素直なアプリは宣言しなくてよい。nginx のように
+	// PORT を見ないものだけが書く。
+	Port int `json:"port"`
+	// Health は HAProxy が叩くパス。
+	Health string `json:"health"`
+}
+
+// Workload はアプリ本体以外の実行単位。
+//
+// migration と cleanup を同じ形で扱う。両者の違いは「デプロイのたびに 1 回
+// 走る」か「スケジュールで走る」かだけで、どちらもアプリ本体とは別の権限で
+// 動く点は共通しているため。
+type Workload struct {
+	// Image を省略するとアプリ本体と同じ image を使う。fighter の cleanup が
+	// これで、引数だけを変えて起動する。
+	Image string `json:"image"`
+	// Args は entrypoint に渡す引数。
+	Args []string `json:"args"`
+	// Schedule があれば systemd timer として登録する。無ければデプロイ時に
+	// 一度だけ実行する。形式は systemd の OnCalendar。
+	Schedule string `json:"schedule"`
+	// Role は接続する DB ロール。owner は DDL、app は DML のみ。
+	// migration だけが owner を要求する。
+	Role string `json:"role"`
+}
+
+// 名前に使える文字を絞る。ここを緩めると unit 名やファイルパスに任意の文字列が
+// 流れ込むため、アプリ側から渡る値としては最も危険な部類になる。
+var nameRE = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// Load は path から読む。ファイルが無い場合は既定値だけの Manifest を返す。
+func Load(path string) (*Manifest, error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return withDefaults(&Manifest{}), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return Parse(b)
+}
+
+// Parse は JSONC のバイト列を読む。
+func Parse(b []byte) (*Manifest, error) {
+	var m Manifest
+	// jsonc.ToJSON はコメントと末尾カンマを空白へ潰す。文字列リテラルの
+	// 中身は保持されるので https:// を壊さない。
+	if err := json.Unmarshal(jsonc.ToJSON(b), &m); err != nil {
+		return nil, fmt.Errorf("yunirun.jsonc を読めません: %w", err)
+	}
+	if err := m.validate(); err != nil {
+		return nil, err
+	}
+	return withDefaults(&m), nil
+}
+
+func (m *Manifest) validate() error {
+	if m.App.Port < 0 || m.App.Port > 65535 {
+		return fmt.Errorf("app.port が範囲外です: %d", m.App.Port)
+	}
+	for name, w := range m.Workloads {
+		if !nameRE.MatchString(name) {
+			return fmt.Errorf("workload 名に使えない文字が含まれています: %q", name)
+		}
+		if w.Role != "" && w.Role != RoleOwner && w.Role != RoleApp {
+			return fmt.Errorf("workload %s の role が不正です: %q", name, w.Role)
+		}
+	}
+	return nil
+}
+
+// DB ロールの種別。
+const (
+	RoleOwner = "owner"
+	RoleApp   = "app"
+)
+
+func withDefaults(m *Manifest) *Manifest {
+	if m.App.Port == 0 {
+		m.App.Port = DefaultPort
+	}
+	if m.App.Health == "" {
+		m.App.Health = DefaultHealth
+	}
+	for name, w := range m.Workloads {
+		if w.Role == "" {
+			// migration は既定で owner。それ以外は app に閉じる。
+			if name == "migration" {
+				w.Role = RoleOwner
+			} else {
+				w.Role = RoleApp
+			}
+			m.Workloads[name] = w
+		}
+	}
+	return m
+}
