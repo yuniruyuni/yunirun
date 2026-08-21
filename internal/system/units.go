@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 // UnitDir は Quadlet が rootless ユーザの定義を探す場所を返す。
@@ -72,7 +73,17 @@ func WriteUnits(home string, uid, gid int, units map[string]string) error {
 }
 
 // ReloadUserUnits はユーザの systemd に定義を読み直させる。
+//
+// linger を有効にしても user@<uid>.service の起動は即座ではない。ユーザを
+// 作った直後に呼ぶと
+//
+//	Failed to connect to user scope bus via local transport: No such file or directory
+//
+// で失敗する。起動を待ってから読み直す。
 func ReloadUserUnits(ctx context.Context, r Runner, user string, uid int) error {
+	if err := waitUserInstance(ctx, r, uid); err != nil {
+		return fmt.Errorf("%s の systemd が起動しません: %w", user, err)
+	}
 	// ssh 経由の非対話セッションでは XDG_RUNTIME_DIR が設定されない。無いと
 	// systemctl --user が DBUS_SESSION_BUS_ADDRESS も無いと言って失敗する。
 	_, err := r.Run(ctx, nil, "systemd-run",
@@ -84,4 +95,26 @@ func ReloadUserUnits(ctx context.Context, r Runner, user string, uid int) error 
 		return fmt.Errorf("%s の unit を読み直せません: %w", user, err)
 	}
 	return nil
+}
+
+// waitUserInstance はユーザの systemd インスタンスが立ち上がるのを待つ。
+func waitUserInstance(ctx context.Context, r Runner, uid int) error {
+	unit := fmt.Sprintf("user@%d.service", uid)
+	// linger を入れた直後は自動起動を待つより明示的に始める方が速く確実。
+	_, _ = r.Run(ctx, nil, "systemctl", "start", unit)
+
+	for i := 0; i < 30; i++ {
+		if _, err := r.Run(ctx, nil, "systemctl", "is-active", "--quiet", unit); err == nil {
+			// bus のソケットが現れるまでにさらに一拍ある。
+			if _, err := os.Stat(fmt.Sprintf("/run/user/%d/bus", uid)); err == nil {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return fmt.Errorf("%s が起動しませんでした", unit)
 }
