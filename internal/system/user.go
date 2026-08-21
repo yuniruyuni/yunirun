@@ -21,10 +21,8 @@ func EnsureUser(ctx context.Context, r Runner, name string, a alloc.Alloc, home 
 	}
 	// グループを先に作る。uid と同じ番号にして、他ユーザとグループを共有しない。
 	// 共有すると、そのグループに付けた読み取り権限が意図しない相手へ渡る。
-	if _, err := r.Run(ctx, nil, "groupadd", "--system", "--gid", strconv.Itoa(a.GID), name); err != nil {
-		if _, e := user.LookupGroup(name); e != nil {
-			return fmt.Errorf("グループ %s を作れません: %w", name, err)
-		}
+	if err := ensureGroup(ctx, r, name, a.GID); err != nil {
+		return err
 	}
 	if _, err := r.Run(ctx, nil, "useradd",
 		"--system",
@@ -37,6 +35,27 @@ func EnsureUser(ctx context.Context, r Runner, name string, a alloc.Alloc, home 
 		name,
 	); err != nil {
 		return fmt.Errorf("ユーザ %s を作れません: %w", name, err)
+	}
+	return nil
+}
+
+// ensureGroup はグループを収束させる。
+//
+// 「同名で既にある」と「番号が別のグループに取られている」を区別する。前者は
+// 収束済みなので続行してよいが、後者で続行するとユーザが他人のグループに属し、
+// そのグループに付けた読み取り権限が意図しない相手へ渡る。
+func ensureGroup(ctx context.Context, r Runner, name string, gid int) error {
+	if g, err := user.LookupGroup(name); err == nil {
+		if g.Gid != strconv.Itoa(gid) {
+			return fmt.Errorf("グループ %s は gid=%s で既にあります (期待は %d)", name, g.Gid, gid)
+		}
+		return nil
+	}
+	if g, err := user.LookupGroupId(strconv.Itoa(gid)); err == nil {
+		return fmt.Errorf("gid=%d は %s に使われています", gid, g.Name)
+	}
+	if _, err := r.Run(ctx, nil, "groupadd", "--system", "--gid", strconv.Itoa(gid), name); err != nil {
+		return fmt.Errorf("グループ %s を作れません: %w", name, err)
 	}
 	return nil
 }

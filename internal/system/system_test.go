@@ -204,3 +204,28 @@ func TestAppendLineIfMissingIsIdempotent(t *testing.T) {
 		t.Fatalf("重複している:\n%s", b)
 	}
 }
+
+// 番号が他のグループに取られている状態で続行すると、ユーザが他人のグループに
+// 属し、そのグループに付けた読み取り権限が意図しない相手へ渡る。
+func TestEnsureGroupRefusesWhenGIDTakenByAnother(t *testing.T) {
+	r := &fakeRunner{}
+	// gid 0 は root が持っている。
+	err := ensureGroup(context.Background(), r, "yunirun-nonexistent-xyz", 0)
+	if err == nil {
+		t.Fatal("使用中の gid で続行してしまった")
+	}
+	if len(r.calls) != 0 {
+		t.Fatal("groupadd を試みている")
+	}
+}
+
+// 既に同じ名前と番号で存在するのは収束済み。作り直さない。
+func TestEnsureGroupIsIdempotentForExistingGroup(t *testing.T) {
+	r := &fakeRunner{}
+	if err := ensureGroup(context.Background(), r, "root", 0); err != nil {
+		t.Fatalf("収束済みなのに失敗した: %v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatal("groupadd を試みている")
+	}
+}
