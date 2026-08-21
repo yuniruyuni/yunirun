@@ -103,6 +103,19 @@ func TestEnsureDatabaseNeverPutsPasswordInArgv(t *testing.T) {
 	}
 }
 
+// pg_hba が local に md5 を要求する構成では root は peer 認証を使えない。
+// postgres だけが peer で入れる。
+func TestEnsureDatabaseRunsPsqlAsPostgres(t *testing.T) {
+	r := &fakeRunner{}
+	if err := EnsureDatabase(context.Background(), r, NamesFor("fighter"), "a", "b"); err != nil {
+		t.Fatal(err)
+	}
+	c := r.calls[0]
+	if c.name != "runuser" || c.args[1] != "postgres" {
+		t.Fatalf("postgres として実行していない: %s %v", c.name, c.args)
+	}
+}
+
 func TestVaultPutSendsValueOnStdinNotArgv(t *testing.T) {
 	r := &fakeRunner{out: []byte("ciphertext")}
 	v := Vault{Dir: t.TempDir(), HostRecipient: "age1host", AdminRecipient: "age1admin", Runner: r}

@@ -67,15 +67,23 @@ func GrantSQL(n DBNames) string {
 }
 
 // EnsureDatabase は DB とロールを収束させる。
+//
+// psql は postgres ユーザとして実行する。pg_hba が local に md5 を要求する
+// 構成 (コンテナから Unix ソケット経由で繋ぐために必要) では、root は peer
+// 認証を使えずパスワードを求められるため。postgres だけが peer で入れる。
 func EnsureDatabase(ctx context.Context, r Runner, n DBNames, ownerPassword, appPassword string) error {
 	// SQL は stdin で渡す。argv に載せるとパスワードが ps から見える。
-	if _, err := r.Run(ctx, []byte(ProvisionSQL(n, ownerPassword, appPassword)),
-		"psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres"); err != nil {
+	if _, err := runPsql(ctx, r, "postgres", ProvisionSQL(n, ownerPassword, appPassword)); err != nil {
 		return fmt.Errorf("%s の DB 作成に失敗しました: %w", n.Database, err)
 	}
-	if _, err := r.Run(ctx, []byte(GrantSQL(n)),
-		"psql", "-v", "ON_ERROR_STOP=1", "-d", n.Database); err != nil {
+	if _, err := runPsql(ctx, r, n.Database, GrantSQL(n)); err != nil {
 		return fmt.Errorf("%s の権限付与に失敗しました: %w", n.Database, err)
 	}
 	return nil
+}
+
+func runPsql(ctx context.Context, r Runner, db, sql string) ([]byte, error) {
+	return r.Run(ctx, []byte(sql),
+		"runuser", "-u", "postgres", "--",
+		"psql", "-v", "ON_ERROR_STOP=1", "-d", db)
 }
