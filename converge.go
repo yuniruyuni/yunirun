@@ -155,6 +155,21 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	runtimeEnv := filepath.Join(runtimeDir, name, "runtime.env")
 	migrationEnv := filepath.Join(runtimeDir, name, "migration.env")
 
+	// アプリ固有の秘密を集める。値は /run/agenix から読む。
+	//
+	// 実体を infra 側 (agenix) に置くのは、アプリのリポジトリに秘密を置かない
+	// という方針のため。アプリ側は名前だけを宣言する。
+	runtimeEnvVars := map[string]string{}
+	for envName, secretName := range m.App.Secrets {
+		v, err := os.ReadFile(filepath.Join("/run/agenix", secretName))
+		if err != nil {
+			return render.App{}, fmt.Errorf("秘密 %s を読めません: %w", secretName, err)
+		}
+		// 末尾改行を落とす。agenix の値に乗っていることがあり、環境変数へ
+		// そのまま入ると認証などが静かに失敗する。
+		runtimeEnvVars[envName] = strings.TrimRight(string(v), "\r\n")
+	}
+
 	// DB を使わないアプリには作らない。作ると消し忘れた資源が溜まるうえ、
 	// 不要な資格情報が生成される。
 	if m.App.Database {
@@ -173,13 +188,18 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 			return render.App{}, err
 		}
 
-		// 秘密を tmpfs へ展開する。runtime 用には app パスワードだけを入れ、
-		// owner パスワードは root しか読めない別ファイルに置く。これで runtime は
-		// owner の資格情報を構造的に持てない。
-		if err := writeEnvFile(runtimeEnv, map[string]string{"DB_PASSWORD": app}, a.UID, a.GID); err != nil {
+		// runtime 用には app パスワードだけを入れ、owner パスワードは root しか
+		// 読めない別ファイルに置く。これで runtime は owner の資格情報を
+		// 構造的に持てない。
+		runtimeEnvVars["DB_PASSWORD"] = app
+		if err := writeEnvFile(migrationEnv, map[string]string{"DB_PASSWORD": owner}, 0, 0); err != nil {
 			return render.App{}, err
 		}
-		if err := writeEnvFile(migrationEnv, map[string]string{"DB_PASSWORD": owner}, 0, 0); err != nil {
+	}
+
+	// 秘密を tmpfs へ展開する。読めるのはこのアプリのユーザだけ。
+	if len(runtimeEnvVars) > 0 {
+		if err := writeEnvFile(runtimeEnv, runtimeEnvVars, a.UID, a.GID); err != nil {
 			return render.App{}, err
 		}
 	}
@@ -206,6 +226,8 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	if m.App.Database {
 		ra.DBName = names.Database
 		ra.DBUser = names.App
+	}
+	if len(runtimeEnvVars) > 0 {
 		ra.EnvFile = runtimeEnv
 	}
 

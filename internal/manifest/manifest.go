@@ -42,6 +42,15 @@ type App struct {
 	// Health は HAProxy が叩くパス。
 	Health string `json:"health"`
 
+	// Secrets は環境変数名から、その値を持つ秘密の名前への対応。
+	//
+	// 値そのものは書かない。ここに書くのは「どの秘密を、どの環境変数として
+	// 渡すか」という対応だけで、値は yunirun が /run/agenix から実行時に読む。
+	//
+	// 秘密の実体を infra 側 (agenix) に置くのは、アプリのリポジトリに秘密を
+	// 置かないという方針のため。アプリ側は名前だけを知っていればよい。
+	Secrets map[string]string `json:"secrets"`
+
 	// Database はこのアプリが PostgreSQL を使うか。
 	//
 	// 使わないアプリに DB とロールを作ると、消し忘れた資源が溜まるうえ
@@ -70,7 +79,11 @@ type Workload struct {
 
 // 名前に使える文字を絞る。ここを緩めると unit 名やファイルパスに任意の文字列が
 // 流れ込むため、アプリ側から渡る値としては最も危険な部類になる。
-var nameRE = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+var (
+	nameRE   = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	envRE    = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+	secretRE = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
+)
 
 // Load は path から読む。ファイルが無い場合は既定値だけの Manifest を返す。
 func Load(path string) (*Manifest, error) {
@@ -101,6 +114,17 @@ func Parse(b []byte) (*Manifest, error) {
 func (m *Manifest) validate() error {
 	if m.App.Port < 0 || m.App.Port > 65535 {
 		return fmt.Errorf("app.port が範囲外です: %d", m.App.Port)
+	}
+	for env, secret := range m.App.Secrets {
+		// 環境変数名は unit ファイルへ書き出す。
+		if !envRE.MatchString(env) {
+			return fmt.Errorf("環境変数名に使えない文字が含まれています: %q", env)
+		}
+		// 秘密の名前はファイルパスの一部になる。ここを緩めると
+		// /run/agenix の外を指せてしまう。
+		if !secretRE.MatchString(secret) {
+			return fmt.Errorf("秘密の名前に使えない文字が含まれています: %q", secret)
+		}
 	}
 	for name, w := range m.Workloads {
 		if !nameRE.MatchString(name) {

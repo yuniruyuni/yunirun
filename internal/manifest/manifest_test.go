@@ -1,6 +1,9 @@
 package manifest
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestParseAppliesConventionDefaults(t *testing.T) {
 	m, err := Parse([]byte(`{}`))
@@ -109,5 +112,48 @@ func TestDatabaseCanBeDeclared(t *testing.T) {
 	}
 	if !m.App.Database {
 		t.Fatal("宣言が反映されていない")
+	}
+}
+
+func TestSecretsAreDeclaredByNameNotValue(t *testing.T) {
+	m, err := Parse([]byte(`{"app":{"secrets":{"BETTER_AUTH_SECRET":"streamer-post-better-auth-secret"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.App.Secrets["BETTER_AUTH_SECRET"] != "streamer-post-better-auth-secret" {
+		t.Fatalf("読めていない: %+v", m.App.Secrets)
+	}
+}
+
+// 秘密の名前はファイルパスの一部になる。ここを緩めると /run/agenix の外を
+// 指せてしまい、任意のファイルを環境変数として読み出せる。
+func TestSecretNameCannotEscapeTheSecretsDirectory(t *testing.T) {
+	for _, bad := range []string{
+		"../../etc/shadow",
+		"/etc/shadow",
+		"a/b",
+		"..",
+		"-leading-dash",
+	} {
+		src := `{"app":{"secrets":{"X":"` + bad + `"}}}`
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Fatalf("秘密の名前 %q を受け入れてしまった", bad)
+		}
+	}
+}
+
+// 環境変数名は unit ファイルへ書き出す。改行や = を含むと別の設定行を
+// 差し込めてしまう。
+func TestEnvNameRejectsInjection(t *testing.T) {
+	for _, bad := range []string{
+		"A=1\nExec",
+		"a-lower",
+		"1LEADING",
+		"WITH SPACE",
+	} {
+		key, _ := json.Marshal(bad)
+		if _, err := Parse([]byte(`{"app":{"secrets":{` + string(key) + `:"x"}}}`)); err == nil {
+			t.Fatalf("環境変数名 %q を受け入れてしまった", bad)
+		}
 	}
 }
