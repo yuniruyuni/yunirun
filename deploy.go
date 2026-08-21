@@ -82,7 +82,25 @@ func runDeploy(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// 受け取ったマニフェストを反映させる。
+	//
+	// unit を書くのは converge の仕事なので、ここで呼ばないと宣言が変わっても
+	// 反映されない。実際、nginx を 80 番で動かすアプリの初回デプロイが、
+	// 既定の 3000 番を publish する古い unit のままで healthy にならなかった。
+	//
+	// deploy ユーザは converge を直接実行できないので systemd 経由で起動する。
+	fmt.Println("==> 宣言を反映")
 	r := system.ExecRunner{}
+	if _, err := r.Run(ctx, nil, "sudo", "--non-interactive",
+		"systemctl", "start", "yunirun-converge.service"); err != nil {
+		return fmt.Errorf("宣言を反映できません: %w", err)
+	}
+
+	// converge が unit を書き直したので、割り当ての情報も読み直す。
+	if info, err = loadAppInfo(app); err != nil {
+		return err
+	}
+
 	owner := strings.SplitN(repo, "/", 2)[0]
 	// image 名はアプリ側が宣言できる。既定はアプリ名。
 	image := imageRef(owner, app, m.App.Image)

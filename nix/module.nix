@@ -159,10 +159,20 @@ in
     # (実体は同じでも文字列が違う)。
     security.sudo.extraRules = lib.mapAttrsToList (name: _: {
       users = [ "yunirun-${name}" ];
-      commands = [{
-        command = "/run/current-system/sw/bin/systemctl start yunirun-migrate@${name}.service";
-        options = [ "NOPASSWD" ];
-      }];
+      commands = [
+        {
+          command = "/run/current-system/sw/bin/systemctl start yunirun-migrate@${name}.service";
+          options = [ "NOPASSWD" ];
+        }
+        # 受け取ったマニフェストを反映させるために converge を起動する。
+        # unit を書くのは converge の仕事なので、これが無いと宣言が変わっても
+        # 反映されない。converge は宣言に無いことは何もしないので、これを
+        # 許しても他アプリへ影響を与えることはできない。
+        {
+          command = "/run/current-system/sw/bin/systemctl start yunirun-converge.service";
+          options = [ "NOPASSWD" ];
+        }
+      ];
     }) cfg.apps;
 
     # 取り込み一覧がそのまま認可になる。
