@@ -87,7 +87,9 @@ func runDeploy(ctx context.Context, args []string) error {
 	// image 名はアプリ側が宣言できる。既定はアプリ名。
 	image := imageRef(owner, app, m.App.Image)
 
-	authfile := filepath.Join(runtimeDir, app, "ghcr-auth.json")
+	// authfile はアプリのユーザが書ける場所に置く。/run/yunirun/<app> 自体は
+	// root 所有で、秘密の env ファイルが入っているため開けない。
+	authfile := filepath.Join(inboxDir(app), "ghcr-auth.json")
 	defer os.Remove(authfile)
 	fmt.Println("==> ghcr.io にログイン")
 	if _, err := r.Run(ctx, []byte(req.Token), "podman", "login", "ghcr.io",
