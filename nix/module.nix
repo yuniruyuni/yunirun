@@ -171,12 +171,15 @@ in
           command = "/run/current-system/sw/bin/systemctl start yunirun-migrate@${name}.service";
           options = [ "NOPASSWD" ];
         }
-        # 受け取ったマニフェストを反映させるために converge を起動する。
+        # 受け取ったマニフェストを反映させるために converge を動かす。
         # unit を書くのは converge の仕事なので、これが無いと宣言が変わっても
         # 反映されない。converge は宣言に無いことは何もしないので、これを
         # 許しても他アプリへ影響を与えることはできない。
+        #
+        # start ではなく restart を許す。converge は RemainAfterExit=yes で
+        # active (exited) のまま留まるため、start では何も起きない。
         {
-          command = "/run/current-system/sw/bin/systemctl start yunirun-converge.service";
+          command = "/run/current-system/sw/bin/systemctl restart yunirun-converge.service";
           options = [ "NOPASSWD" ];
         }
       ];

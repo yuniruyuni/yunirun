@@ -98,3 +98,36 @@ func TestLoadLedgerTreatsMissingFileAsEmpty(t *testing.T) {
 		t.Fatal("空でない")
 	}
 }
+
+// 名前を変えただけで新しい番号が振られると、稼働中のコンテナが旧ポートに
+// 取り残されて停止する。
+func TestRenameKeepsTheAllocation(t *testing.T) {
+	l := &Ledger{Entries: map[string]Alloc{}}
+	b := DefaultBase()
+	before := l.Ensure([]string{"app2"}, b)["app2"]
+
+	if !l.Rename("app2", "app") {
+		t.Fatal("改名できなかった")
+	}
+	after := l.Ensure([]string{"app"}, b)["app"]
+	if after != before {
+		t.Fatalf("改名で割り当てが動いた: %+v -> %+v", before, after)
+	}
+	if _, stale := l.Entries["app2"]; stale {
+		t.Fatal("旧名が残っている")
+	}
+}
+
+// 上書きすると別のアプリの割り当てを奪う。
+func TestRenameRefusesWhenTargetIsTaken(t *testing.T) {
+	l := &Ledger{Entries: map[string]Alloc{}}
+	b := DefaultBase()
+	l.Ensure([]string{"a", "b"}, b)
+
+	if l.Rename("a", "b") {
+		t.Fatal("使用中の名前へ改名してしまった")
+	}
+	if len(l.Entries) != 2 {
+		t.Fatalf("エントリ数が変わった: %d", len(l.Entries))
+	}
+}

@@ -119,3 +119,24 @@ func (l *Ledger) allocate(b Base) (Alloc, error) {
 
 // Remove は台帳から消す。番号を再利用できるようにする。
 func (l *Ledger) Remove(name string) { delete(l.Entries, name) }
+
+// Rename は台帳上のアプリ名を変える。割り当てはそのまま引き継ぐ。
+//
+// 名前を変えただけで新しい番号が振られると、稼働中のコンテナが旧ポートに
+// 取り残されて停止する。移行のために付けた接尾辞を外すときなど、実体は
+// 同じまま名前だけ変わる場面がある。
+//
+// 移行先の名前が既に使われている場合は何もしない。上書きすると別のアプリの
+// 割り当てを奪うことになる。
+func (l *Ledger) Rename(from, to string) bool {
+	a, ok := l.Entries[from]
+	if !ok {
+		return false
+	}
+	if _, taken := l.Entries[to]; taken {
+		return false
+	}
+	l.Entries[to] = a
+	delete(l.Entries, from)
+	return true
+}

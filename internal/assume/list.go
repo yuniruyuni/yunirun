@@ -58,6 +58,21 @@ var assumptions = []Assumption{
 		// 実行時に検査する意味が薄い (待てば成り立つ) ので e2e に任せる。
 	},
 	{
+		ID:   "systemd/start-on-an-active-unit-is-a-noop",
+		What: "既に active な unit への systemctl start は何もせず成功する",
+		Why: "converge は Type=oneshot かつ RemainAfterExit=yes なので、" +
+			"一度成功すると active (exited) のまま留まる。そこへ start を送っても " +
+			"何も起きないが終了コードは 0 になる。デプロイは「宣言を反映」と表示しながら " +
+			"実際には収束しておらず、マニフェストの変更が一切効かない状態が続いた。" +
+			"収束をやり直させたいときは restart を使う。",
+		Check: func(ctx context.Context, env Env) error {
+			// converge 自身から呼ばれるので、ここで converge の状態は見ない
+			// (自分が動いている間は必ず activating になる)。代わりに
+			// deploy が使う呼び出しが restart であることを単体テストで守る。
+			return nil
+		},
+	},
+	{
 		ID:   "fs/traversal-needs-x-on-every-component",
 		What: "パスの途中に x が無ければ、末端の権限に関係なく届かない",
 		Why: "stateDir を 0700 root にしたため配下のホームへ辿れなかった。" +

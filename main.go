@@ -30,6 +30,8 @@ func main() {
 		err = runMigrate(ctx, os.Args[2:])
 	case "doctor":
 		err = runDoctor(ctx, os.Args[2:])
+	case "rename":
+		err = runRename(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -69,6 +71,10 @@ func usage() {
       yunirun が置いている前提が今の環境で成り立っているか確かめる。
       この仕組みは外部システムの挙動に多く依存しており、前提が破れたときに
       原因の分からない不具合ではなく前提の名前で分かるようにする。
+
+  yunirun rename <旧名> <新名>
+      台帳上のアプリ名を変える。割り当てを引き継ぐので、稼働中のコンテナが
+      旧ポートに取り残されることがない。旧名の資源は残るので手で消す。
 
 設定の所在:
   /etc/yunirun/config.json   どのリポジトリを取り込むか (システム側)
