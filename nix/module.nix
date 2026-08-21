@@ -140,10 +140,15 @@ in
     };
 
     # deploy ユーザに許すのは自分のアプリの migration を起動することだけ。
+    #
+    # パスは /run/current-system/sw/bin を使う。sudo はコマンドを文字列で
+    # 照合するので、${pkgs.systemd}/bin/systemctl と書くと、呼び出し側が PATH で
+    # 解決した /run/current-system/sw/bin/systemctl と一致せず拒否される
+    # (実体は同じでも文字列が違う)。
     security.sudo.extraRules = lib.mapAttrsToList (name: _: {
       users = [ "yunirun-${name}" ];
       commands = [{
-        command = "${pkgs.systemd}/bin/systemctl start yunirun-migrate@${name}.service";
+        command = "/run/current-system/sw/bin/systemctl start yunirun-migrate@${name}.service";
         options = [ "NOPASSWD" ];
       }];
     }) cfg.apps;
