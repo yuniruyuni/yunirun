@@ -5,6 +5,14 @@
 # どちらかが崩れても静かに成立しなくなる。
 { pkgs, self, ... }:
 
+let
+  # マニフェストは Nix 側でファイルにする。テストスクリプト内でヒアドキュメントを
+  # 書くと、Python の三重引用符が Nix の文字列終端 '' と衝突する。
+  manifest = pkgs.writeText "yunirun.jsonc" (builtins.toJSON {
+    app.database = true;
+    workloads.migration = { };
+  });
+in
 pkgs.testers.runNixOSTest {
   name = "yunirun-database";
 
@@ -46,11 +54,7 @@ pkgs.testers.runNixOSTest {
     # DB を使うと宣言したマニフェストを置いてから収束させる。
     # 実際は deploy が運んでくるが、ここでは直接置く。
     machine.succeed("mkdir -p /run/yunirun/beta/inbox")
-    machine.succeed(
-        """cat > /run/yunirun/beta/inbox/yunirun.jsonc <<'EOF'
-{ "app": { "database": true }, "workloads": { "migration": {} } }
-EOF"""
-    )
+    machine.succeed("cp ${manifest} /run/yunirun/beta/inbox/yunirun.jsonc")
     machine.succeed("yunirun converge")
 
     with subtest("DB とロールが作られる"):
@@ -87,10 +91,12 @@ EOF"""
     with subtest("per-table GRANT を撒いていない"):
         # 撒くと pgschema に毎回 REVOKE され、次の収束で復活する振動になる。
         # その間アプリは permission denied になる。
+        # SQL で空文字列リテラルを使わない書き方にしてある。testScript は Nix の
+        # 複数行文字列なので、単引用符を 2 つ並べると文字列終端と解釈される。
         acl = machine.succeed(
-            "sudo -u postgres psql -d beta -tAc \"select coalesce(string_agg(defaclacl::text,','),'') from pg_default_acl\""
+            "sudo -u postgres psql -d beta -tAc \"select count(*) from pg_default_acl\""
         )
-        assert "beta_app" not in acl, f"ALTER DEFAULT PRIVILEGES を発行している: {acl}"
+        assert acl.strip() == "0", f"ALTER DEFAULT PRIVILEGES を発行している: {acl}"
 
     with subtest("パスワードは再収束で変わらない"):
         # 作り直すと DB 側と食い違い、稼働中のコンテナが認証に失敗する。
