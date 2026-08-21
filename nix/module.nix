@@ -205,7 +205,17 @@ in
       serviceConfig = {
         Type = "notify";
         ExecStart = "${pkgs.haproxy}/bin/haproxy -Ws -f /etc/yunirun/haproxy.cfg";
-        ExecReload = "${pkgs.haproxy}/bin/haproxy -Ws -f /etc/yunirun/haproxy.cfg -c -q";
+        # reload は 2 段。まず設定を検査し (壊れた設定で reload すると
+        # マスターが古い設定のまま残り、何が起きたか分かりにくい)、通れば
+        # SIGUSR2 でマスターに再読込を指示する。
+        #
+        # -c だけを書いていたときは検査しかせず、新しいアプリを足しても
+        # listen が増えなかった。設定には backend があるのにポートが開かない
+        # という分かりにくい状態になる。
+        ExecReload = [
+          "${pkgs.haproxy}/bin/haproxy -Ws -f /etc/yunirun/haproxy.cfg -c -q"
+          "${pkgs.coreutils}/bin/kill -USR2 $MAINPID"
+        ];
         Restart = "always";
       };
     };
