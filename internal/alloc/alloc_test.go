@@ -57,3 +57,30 @@ func TestUserIsNamespaced(t *testing.T) {
 		t.Fatalf("User(web) = %q", got)
 	}
 }
+
+// subuid 帯が重なると、あるアプリのコンテナ内 uid が別アプリのファイル所有者と
+// 一致してしまう。
+func TestSubUIDRangesDoNotOverlap(t *testing.T) {
+	got := For(names(), DefaultBase())
+	type span struct{ lo, hi int }
+	var spans []span
+	for _, a := range got {
+		spans = append(spans, span{a.SubUID, a.SubUID + SubUIDSize - 1})
+	}
+	for i := range spans {
+		for j := i + 1; j < len(spans); j++ {
+			if spans[i].lo <= spans[j].hi && spans[j].lo <= spans[i].hi {
+				t.Fatalf("subuid 帯が重なっている: %+v と %+v", spans[i], spans[j])
+			}
+		}
+	}
+}
+
+// NixOS は 100000 付近から subuid を配る。そこに重ねると既存ユーザと衝突する。
+func TestSubUIDBaseAvoidsNixOSRange(t *testing.T) {
+	for _, a := range For(names(), DefaultBase()) {
+		if a.SubUID < 1000000 {
+			t.Fatalf("subuid=%d は NixOS の割り当て帯に近すぎる", a.SubUID)
+		}
+	}
+}

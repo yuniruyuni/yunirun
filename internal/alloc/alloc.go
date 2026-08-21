@@ -23,7 +23,15 @@ type Alloc struct {
 	// Blue と Green はコンテナを publish するポート。
 	Blue  int
 	Green int
+
+	// SubUID は rootless podman が使う subuid/subgid の開始値。
+	// NixOS の自動割り当て (100000 付近から hash で散らす) と重ならない帯を取る。
+	SubUID int
 }
+
+// SubUIDSize は 1 ユーザに割り当てる subuid の幅。
+// rootless podman の慣習に合わせて 65536 にする。
+const SubUIDSize = 65536
 
 // Base は割り当ての起点。
 //
@@ -34,6 +42,8 @@ type Alloc struct {
 type Base struct {
 	UID  int
 	Port int
+	// SubUID は subuid 帯の起点。NixOS が使う 100000 付近を避けて高い位置に取る。
+	SubUID int
 	// PortStride は 1 アプリが使うポート幅。frontend/blue/green の 3 つに
 	// 余裕を持たせて 10 にしてある。
 	PortStride int
@@ -41,7 +51,7 @@ type Base struct {
 
 // DefaultBase は運用で使う既定値。
 func DefaultBase() Base {
-	return Base{UID: 6000, Port: 8100, PortStride: 10}
+	return Base{UID: 6000, Port: 8100, PortStride: 10, SubUID: 4000000}
 }
 
 // For は名前順に並べた apps に対する割り当てを返す。
@@ -65,6 +75,7 @@ func For(names []string, b Base) map[string]Alloc {
 			Frontend: front,
 			Blue:     front + 1,
 			Green:    front + 2,
+			SubUID:   b.SubUID + i*SubUIDSize,
 		}
 	}
 	return out

@@ -28,9 +28,14 @@ type App struct {
 	// DBName と DBUser はアプリ本体が使う DB とロール。
 	DBName string
 	DBUser string
-	// SecretEnv は環境変数名から podman secret 名への対応。
-	// アプリリポジトリの secrets/<ENV>.age から作られる。
-	SecretEnv map[string]string
+	// EnvFile は秘密を含む環境変数ファイルの位置。tmpfs 上に置き、読めるのは
+	// そのワークロードのユーザだけにする。
+	//
+	// unit ファイルにはパスしか現れないので、値がディスクや世界読み取り可能な
+	// 場所へ漏れることがない。runtime の EnvFile には app パスワードしか
+	// 入れず、owner パスワードは root しか読めない別のファイルに置く。
+	// これで「runtime は owner パスワードを持てない」が構造として成立する。
+	EnvFile string
 }
 
 // Port は色に対応する publish 先ポートを返す。
@@ -63,12 +68,10 @@ func ContainerUnit(a App, color string) string {
 		p("Environment=PGPORT=5432")
 		p("Environment=DB_USER=%s", a.DBUser)
 		p("Environment=DB_NAME=%s", a.DBName)
-		p("Secret=%s,type=env,target=DB_PASSWORD", a.Name+"-db-app")
 	}
 
-	for _, env := range sortedKeys(a.SecretEnv) {
-		// 値は実行時に取得され、unit ファイルにもディスクにも現れない。
-		p("Secret=%s,type=env,target=%s", a.SecretEnv[env], env)
+	if a.EnvFile != "" {
+		p("EnvironmentFile=%s", a.EnvFile)
 	}
 
 	p("")
@@ -120,13 +123,4 @@ func HAProxy(apps []App) string {
 		}
 	}
 	return b.String()
-}
-
-func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
