@@ -50,3 +50,6 @@ jobs:
 
       - name: converge の e2e
         run: nix build .#checks.x86_64-linux.converge -L
+
+      - name: DB と権限分離の e2e
+        run: nix build .#checks.x86_64-linux.database -L

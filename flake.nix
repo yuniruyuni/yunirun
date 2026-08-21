@@ -31,6 +31,10 @@
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
           inherit self;
         };
+        database = import ./nix/tests/database.nix {
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+          inherit self;
+        };
       };
 
       devShells = forAll (pkgs: {
