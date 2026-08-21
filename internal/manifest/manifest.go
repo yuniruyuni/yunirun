@@ -28,6 +28,13 @@ type Manifest struct {
 
 // App はアプリ本体の性質。
 type App struct {
+	// Image は GHCR 上の image 名。省略するとアプリ名を使う。
+	//
+	// アプリ名と image 名が食い違う場合に指定する。yuniruyuni.net 側で付ける
+	// 名前 (DB やユーザの名前になる) と、リポジトリが push する image 名は
+	// 本来別のものなので、後者はアプリ側が宣言する。
+	Image string `json:"image"`
+
 	// Port はコンテナ内で listen するポート。yunirun は PORT 環境変数でも
 	// 同じ値を渡すので、素直なアプリは宣言しなくてよい。nginx のように
 	// PORT を見ないものだけが書く。

@@ -64,14 +64,12 @@ func runMigrate(ctx context.Context, args []string) error {
 		return err
 	}
 	owner := strings.SplitN(repo, "/", 2)[0]
-	image := w.Image
-	if image == "" {
-		// 省略時はアプリ本体と同じ image を使う。fighter の cleanup がこの形。
-		image = app
+	// 省略時はアプリ本体と同じ image を使う。fighter の cleanup がこの形。
+	base := w.Image
+	if base == "" {
+		base = m.App.Image
 	}
-	if !strings.Contains(image, "/") {
-		image = "ghcr.io/" + owner + "/" + image
-	}
+	image := imageRef(owner, app, base)
 
 	names := system.NamesFor(app)
 	r := system.ExecRunner{}

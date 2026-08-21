@@ -86,7 +86,8 @@ func runDeploy(ctx context.Context, args []string) error {
 
 	r := system.ExecRunner{}
 	owner := strings.SplitN(repo, "/", 2)[0]
-	image := "ghcr.io/" + owner + "/" + app
+	// image 名はアプリ側が宣言できる。既定はアプリ名。
+	image := imageRef(owner, app, m.App.Image)
 
 	authfile := filepath.Join(runtimeDir, app, "ghcr-auth.json")
 	defer os.Remove(authfile)
@@ -152,6 +153,20 @@ func waitHealthy(ctx context.Context, port int, path string) error {
 		}
 	}
 	return fmt.Errorf("%s が応答しません", url)
+}
+
+// imageRef は image の完全な参照を組み立てる。
+//
+// 宣言が空ならアプリ名、"/" を含まなければ owner を補い、含むならそのまま使う。
+func imageRef(owner, app, declared string) string {
+	name := declared
+	if name == "" {
+		name = app
+	}
+	if strings.Contains(name, "/") {
+		return name
+	}
+	return "ghcr.io/" + owner + "/" + name
 }
 
 func appFromCurrentUser(cfg *config.Config) (string, error) {
