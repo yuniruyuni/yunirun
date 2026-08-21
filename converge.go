@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -54,12 +55,28 @@ func runConverge(ctx context.Context, args []string) error {
 		return err2
 	}
 
+	// 1 つのアプリの失敗で全体を止めない。
+	//
+	// マニフェストはアプリ側のリポジトリから来るので、他人の事故がこちらの
+	// 収束を巻き込む形になってはいけない。失敗したアプリはスキップし、残りを
+	// 収束させてから最後にまとめて報告する。
+	//
+	// スキップしたアプリを HAProxy から外さないのも意図的。外すと現に動いている
+	// コンテナへの経路が切れて停止する。宣言が読めないことと、既に動いている
+	// ものを止めてよいことは別。
 	var apps []render.App
+	var failed []error
 	for _, name := range cfg.Names() {
 		a := allocs[name]
 		app, err := convergeApp(ctx, r, cfg, name, a, hostRecipient)
 		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+			fmt.Fprintf(os.Stderr, "!!! %s: %v\n", name, err)
+			failed = append(failed, fmt.Errorf("%s: %w", name, err))
+			// 収束はできなかったが、既存の経路は保つ。
+			if prev, ok := previousApp(cfg, name, a); ok {
+				apps = append(apps, prev)
+			}
+			continue
 		}
 		apps = append(apps, app)
 		fmt.Printf("==> %s (uid=%d frontend=%d)\n", name, a.UID, a.Frontend)
@@ -72,7 +89,30 @@ func runConverge(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("==> HAProxy 設定を書き出しました: %s\n", *haproxyOut)
+
+	if len(failed) > 0 {
+		return fmt.Errorf("%d 個のアプリを収束できませんでした: %w", len(failed), errors.Join(failed...))
+	}
 	return nil
+}
+
+// previousApp は収束に失敗したアプリについて、HAProxy の経路だけを保つための
+// 最小限の情報を返す。
+//
+// マニフェストが読めない状態なので、ポートとヘルスパスは既定値を使う。既に
+// 動いているコンテナが別のポートを使っていれば経路は復旧しないが、少なくとも
+// 他のアプリの設定を巻き込んで消すことはない。
+func previousApp(cfg *config.Config, name string, a alloc.Alloc) (render.App, bool) {
+	m, err := manifest.Parse([]byte("{}"))
+	if err != nil {
+		return render.App{}, false
+	}
+	return render.App{
+		Name:     name,
+		User:     alloc.User(name),
+		Alloc:    a,
+		Manifest: m,
+	}, true
 }
 
 func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,

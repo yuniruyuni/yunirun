@@ -16,6 +16,11 @@ import (
 // Colors は blue/green の名前。順序が入れ替え順になる。
 var Colors = []string{"blue", "green"}
 
+// PlaceholderPort はアプリが 0 個のときに置く待機用 listener のポート。
+//
+// アプリの割り当て帯 (8100 以降) より手前に取って、実アプリと重ならないようにする。
+const PlaceholderPort = 8099
+
 // App は 1 アプリ分の生成に必要な情報をまとめたもの。
 type App struct {
 	Name     string
@@ -102,16 +107,34 @@ func HAProxy(apps []App) string {
 	p("  timeout client  60s")
 	p("  timeout server  60s")
 
+	if len(apps) == 0 {
+		// listener が 1 つも無いと haproxy は
+		//   Configuration file has no error but will not start (no listener)
+		// として exit(2) する。アプリを一時的に全部外したときに haproxy が
+		// 落ちたままにならないよう、何も受けない listener を置いておく。
+		p("")
+		p("# アプリが 1 つも無いときのための待機用 listener。")
+		p("# haproxy は listener が無いと起動できない。")
+		p("frontend yunirun_placeholder")
+		p("  bind 127.0.0.1:%d", PlaceholderPort)
+		p("  http-request return status 503")
+		return b.String()
+	}
+
 	sorted := append([]App(nil), apps...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
 	for _, a := range sorted {
 		p("")
-		p("frontend %s", a.Name)
+		// frontend と backend を同名にすると haproxy が
+		//   backend 'x' has the same name as frontend 'x'.
+		//   This is dangerous and will not be supported anymore in version 3.3.
+		// と警告する。接尾辞で分ける。
+		p("frontend %s_in", a.Name)
 		p("  bind 127.0.0.1:%d", a.Alloc.Frontend)
-		p("  default_backend %s", a.Name)
+		p("  default_backend %s_out", a.Name)
 		p("")
-		p("backend %s", a.Name)
+		p("backend %s_out", a.Name)
 		// Host ヘッダを明示する。option httpchk の既定は HTTP/1.0 かつ Host 無しで、
 		// Host で振り分けるアプリはそれを 404 にする。curl は常に Host を送るため
 		// 手元の確認では 200 に見え、原因が分かりにくい。

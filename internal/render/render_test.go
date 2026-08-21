@@ -98,6 +98,17 @@ func TestHAProxyOrdersAppsDeterministically(t *testing.T) {
 	}
 }
 
+// 同名にすると haproxy 3.3 で動かなくなる。
+func TestHAProxyGivesFrontendAndBackendDistinctNames(t *testing.T) {
+	got := HAProxy([]App{sample()})
+	if !strings.Contains(got, "frontend fighter_in") || !strings.Contains(got, "backend fighter_out") {
+		t.Fatalf("名前が分かれていない:\n%s", got)
+	}
+	if strings.Contains(got, "frontend fighter\n") {
+		t.Fatalf("frontend が backend と同名:\n%s", got)
+	}
+}
+
 func TestWorkloadUnitIsOneshotNotRestarting(t *testing.T) {
 	got := WorkloadUnit(sample(), "cleanup", WorkloadSpec{Image: "x", DBUser: "fighter_app"})
 	if !strings.Contains(got, "Type=oneshot") {
@@ -125,5 +136,25 @@ func TestTimerUnitSchedulesAndCatchesUp(t *testing.T) {
 	// 停止中に時刻を過ぎた分を落とさない。
 	if !strings.Contains(got, "Persistent=true") {
 		t.Fatalf("Persistent が無い:\n%s", got)
+	}
+}
+
+// listener が 1 つも無いと haproxy は "no listener" で exit(2) する。
+// アプリを一時的に全部外したときに haproxy が落ちたままにならないようにする。
+func TestHAProxyStillHasAListenerWithNoApps(t *testing.T) {
+	got := HAProxy(nil)
+	if !strings.Contains(got, "frontend yunirun_placeholder") {
+		t.Fatalf("待機用 listener が無い:\n%s", got)
+	}
+	if !strings.Contains(got, "bind 127.0.0.1:8099") {
+		t.Fatalf("bind が無い:\n%s", got)
+	}
+}
+
+func TestHAProxyPlaceholderDisappearsOnceAppsExist(t *testing.T) {
+	got := HAProxy([]App{sample()})
+	// アプリがあるのに待機用が残ると、余計なポートを占有し続ける。
+	if strings.Contains(got, "yunirun_placeholder") {
+		t.Fatalf("待機用 listener が残っている:\n%s", got)
 	}
 }
