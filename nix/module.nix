@@ -176,7 +176,11 @@ in
     };
 
     systemd.tmpfiles.rules = [
+      # stateDir には台帳と秘密が入るので root 専用。
       "d ${cfg.stateDir} 0700 root root -"
+      # home はアプリのユーザが自分のディレクトリへ辿れる必要があるので開ける。
+      # 各アプリのホーム自体は 0700 でユーザ所有になる。
+      "d ${cfg.stateDir}/home 0755 root root -"
       "d /run/yunirun 0755 root root -"
     ];
   };

@@ -61,13 +61,11 @@ func runDeploy(ctx context.Context, args []string) error {
 		return fmt.Errorf("%s は取り込まれていません", app)
 	}
 
-	allocs, err := cfg.Allocs()
+	// 割り当ては converge が置いた情報から読む。台帳そのものは root 専用で、
+	// 他アプリの割り当ても含むので deploy には見せない。
+	info, err := loadAppInfo(app)
 	if err != nil {
 		return err
-	}
-	a, ok := allocs[app]
-	if !ok {
-		return fmt.Errorf("%s の割り当てがありません", app)
 	}
 
 	var req Request
@@ -126,9 +124,9 @@ func runDeploy(ctx context.Context, args []string) error {
 		if _, err := r.Run(ctx, nil, "systemctl", "--user", "restart", unit); err != nil {
 			return err
 		}
-		port := a.Blue
+		port := info.Blue
 		if color == "green" {
-			port = a.Green
+			port = info.Green
 		}
 		if err := waitHealthy(ctx, port, m.App.Health); err != nil {
 			// 片側が上がらない時点で止める。もう片方はまだ旧版のまま動いている。
@@ -158,6 +156,19 @@ func waitHealthy(ctx context.Context, port int, path string) error {
 // imageRef は image の完全な参照を組み立てる。
 //
 // 宣言が空ならアプリ名、"/" を含まなければ owner を補い、含むならそのまま使う。
+// loadAppInfo は converge が置いた情報を読む。
+func loadAppInfo(app string) (*AppInfo, error) {
+	b, err := os.ReadFile(appInfoPath(app))
+	if err != nil {
+		return nil, fmt.Errorf("%s はまだ収束していません: %w", app, err)
+	}
+	var info AppInfo
+	if err := json.Unmarshal(b, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 func imageRef(owner, app, declared string) string {
 	name := declared
 	if name == "" {
@@ -185,18 +196,14 @@ func appFromCurrentUser(cfg *config.Config) (string, error) {
 	return name, nil
 }
 
+// saveManifest と saveTag は受け渡し用ディレクトリへ書く。
+//
+// このディレクトリは converge がアプリのユーザ所有で作る。stateDir は台帳や
+// 秘密が入っているので root 専用のままにしておく。
 func saveManifest(cfg *config.Config, app, content string) error {
-	p := manifestPath(cfg, app)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(p, []byte(content), 0o644)
+	return os.WriteFile(manifestPath(cfg, app), []byte(content), 0o644)
 }
 
-func saveTag(cfg *config.Config, app, tag string) error {
-	p := filepath.Join(cfg.StateDir, "tags", app)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(p, []byte(tag), 0o644)
+func saveTag(_ *config.Config, app, tag string) error {
+	return os.WriteFile(tagPath(app), []byte(tag), 0o644)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -131,8 +132,11 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		return render.App{}, err
 	}
 
-	// マニフェストは deploy 時に運ばれて状態として残る。まだ一度も deploy
-	// されていなければ規約の既定値で動く。
+	// マニフェストは deploy 時に運ばれて残る。まだ一度も deploy されていなければ
+	// 規約の既定値で動く。
+	if err := ensureInbox(name, a); err != nil {
+		return render.App{}, err
+	}
 	m, err := manifest.Load(manifestPath(cfg, name))
 	if err != nil {
 		return render.App{}, err
@@ -163,6 +167,18 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	}
 	migrationEnv := filepath.Join(runtimeDir, name, "migration.env")
 	if err := writeEnvFile(migrationEnv, map[string]string{"DB_PASSWORD": owner}, 0, 0); err != nil {
+		return render.App{}, err
+	}
+
+	// deploy が読むための情報を tmpfs へ置く。
+	//
+	// deploy はアプリのユーザで動くので、root 専用の stateDir 配下 (台帳など) を
+	// 読めない。そもそも deploy に必要なのは自分のポートだけで、他アプリの割り当てを
+	// 含む台帳全体を見せる理由が無い。
+	if err := writeAppInfo(name, a, m); err != nil {
+		return render.App{}, err
+	}
+	if err := ensureInbox(name, a); err != nil {
 		return render.App{}, err
 	}
 
@@ -274,8 +290,48 @@ func writeEnvFile(path string, kv map[string]string, uid, gid int) error {
 	return os.Chmod(path, 0o400)
 }
 
-func manifestPath(cfg *config.Config, app string) string {
-	return filepath.Join(cfg.StateDir, "manifests", app+".jsonc")
+// AppInfo は deploy が必要とする情報。converge が書き、deploy が読む。
+type AppInfo struct {
+	Blue   int    `json:"blue"`
+	Green  int    `json:"green"`
+	Health string `json:"health"`
+}
+
+func appInfoPath(app string) string {
+	return filepath.Join(runtimeDir, app, "app.json")
+}
+
+func writeAppInfo(app string, a alloc.Alloc, m *manifest.Manifest) error {
+	if err := os.MkdirAll(filepath.Dir(appInfoPath(app)), 0o755); err != nil {
+		return err
+	}
+	b, err := json.Marshal(AppInfo{Blue: a.Blue, Green: a.Green, Health: m.App.Health})
+	if err != nil {
+		return err
+	}
+	// 秘密は含まないので誰が読んでもよい。
+	return os.WriteFile(appInfoPath(app), b, 0o644)
+}
+
+// inboxDir は deploy がマニフェストとタグを置く場所。
+//
+// stateDir は root 専用にしておきたい (台帳や秘密が入っている) ので、アプリが
+// 書く場所だけを分ける。converge と migrate はここから読む。
+func inboxDir(app string) string { return filepath.Join(runtimeDir, app, "inbox") }
+
+func manifestPath(_ *config.Config, app string) string {
+	return filepath.Join(inboxDir(app), "yunirun.jsonc")
+}
+
+func tagPath(app string) string { return filepath.Join(inboxDir(app), "tag") }
+
+// ensureInbox は受け渡し用ディレクトリをアプリのユーザ所有で作る。
+func ensureInbox(app string, a alloc.Alloc) error {
+	d := inboxDir(app)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		return err
+	}
+	return os.Chown(d, a.UID, a.GID)
 }
 
 // hostAgeRecipient は ssh のホスト鍵から導いた age 公開鍵を返す。

@@ -100,8 +100,8 @@ func runMigrate(ctx context.Context, args []string) error {
 	return nil
 }
 
-func readTag(cfg *config.Config, app string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(cfg.StateDir, "tags", app))
+func readTag(_ *config.Config, app string) (string, error) {
+	b, err := os.ReadFile(tagPath(app))
 	if err != nil {
 		return "", fmt.Errorf("適用するタグが分かりません: %w", err)
 	}
