@@ -177,8 +177,14 @@ in
     systemd.services.yunirun-haproxy = {
       description = "yunirun: HAProxy";
       wantedBy = [ "multi-user.target" ];
+      # converge の後に始めるが、失敗しても道連れにしない。
+      #
+      # Requires にしていたところ、1 アプリの収束に失敗しただけで HAProxy まで
+      # 停止し、収束できた他のアプリが巻き添えで落ちた。converge は失敗した
+      # アプリをスキップして残りを収束させ、経路も保つ作りにしてあるので、
+      # 設定は書き出されている。
       after = [ "yunirun-converge.service" ];
-      requires = [ "yunirun-converge.service" ];
+      wants = [ "yunirun-converge.service" ];
       serviceConfig = {
         Type = "notify";
         ExecStart = "${pkgs.haproxy}/bin/haproxy -Ws -f /etc/yunirun/haproxy.cfg";
