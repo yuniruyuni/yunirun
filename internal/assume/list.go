@@ -22,14 +22,30 @@ var assumptions = []Assumption{
 			"モジュールが nix store の絶対パスで許可を書き、deploy 側が PATH で " +
 			"解決した /run/current-system/sw/bin/... を渡して拒否された。",
 		Check: func(ctx context.Context, env Env) error {
-			// sudo -l の出力に、実際に叩くパスがそのまま現れることを確かめる。
-			out, err := env.Run(ctx, "sudo", "-n", "-l")
+			// sudoers に書かれたパスが、実際に呼ぶときの PATH 解決の結果と
+			// 一致しているかを見る。
+			//
+			// root の sudo -l は全許可を返してアプリ固有のルールが現れないので、
+			// 設定ファイルそのものを読む。
+			b, err := os.ReadFile("/etc/sudoers")
 			if err != nil {
-				// 権限が無い環境では検査しない。
 				return nil
 			}
-			if !strings.Contains(string(out), "/run/current-system/sw/bin/systemctl") {
-				return fmt.Errorf("許可されたパスが PATH 解決の結果と一致していない")
+			cfg := string(b)
+			if !strings.Contains(cfg, "yunirun-") {
+				// yunirun のルールがまだ無い環境では検査しない。
+				return nil
+			}
+			for _, line := range strings.Split(cfg, "\n") {
+				if !strings.Contains(line, "yunirun-") || !strings.Contains(line, "systemctl") {
+					continue
+				}
+				// nix store の絶対パスで書かれていると、PATH で解決した
+				// /run/current-system/sw/bin/systemctl と文字列が一致せず拒否される。
+				if strings.Contains(line, "/nix/store/") {
+					return fmt.Errorf("nix store の絶対パスで許可している (PATH 解決の結果と一致しない): %s",
+						strings.TrimSpace(line))
+				}
 			}
 			return nil
 		},
