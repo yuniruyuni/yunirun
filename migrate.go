@@ -71,7 +71,7 @@ func runMigrate(ctx context.Context, args []string) error {
 	}
 	image := imageRef(owner, app, base)
 
-	names := system.NamesFor(app)
+	names := dbNamesFor(app, m)
 	r := system.ExecRunner{}
 
 	fmt.Printf("==> %s:%s で schema を適用\n", image, tag)
