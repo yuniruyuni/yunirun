@@ -1,8 +1,10 @@
 package system
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +56,35 @@ func TestWriteUnitsLeavesUnchangedFilesAlone(t *testing.T) {
 	// 書き換えると systemd が変更を検知して無用な再起動を招く。
 	if !st1.ModTime().Equal(st2.ModTime()) {
 		t.Fatal("内容が同じなのに書き換えている")
+	}
+}
+
+// linger を有効にしても user@<uid>.service の起動は即座ではない。ユーザを
+// 作った直後に daemon-reload を呼ぶと bus がまだ無く、
+//
+//	Failed to connect to user scope bus via local transport
+//
+// で失敗する。待機が入っていることを型として保証できないので、せめて
+// 呼び出し順を固定する。
+func TestReloadUserUnitsWaitsForTheUserInstanceFirst(t *testing.T) {
+	r := &recordingRunner{}
+	// 存在しない uid なので待機は失敗するが、順序は観測できる。
+	defer func(n int) { userInstanceWaitTries = n }(userInstanceWaitTries)
+	userInstanceWaitTries = 1
+	_ = ReloadUserUnits(context.Background(), r, "nobody", 999999)
+
+	if len(r.commands) == 0 {
+		t.Fatal("何も実行していない")
+	}
+	// 最初に user@<uid> を起動しようとするはず。daemon-reload が先に来ると
+	// bus が無い状態で叩くことになる。
+	first := r.commands[0]
+	if !strings.Contains(first, "user@999999.service") {
+		t.Fatalf("ユーザインスタンスの起動を先に試していない: %q", first)
+	}
+	for _, c := range r.commands {
+		if strings.Contains(c, "daemon-reload") {
+			t.Fatal("待機が終わる前に daemon-reload を呼んでいる")
+		}
 	}
 }

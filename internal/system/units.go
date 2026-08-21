@@ -97,13 +97,16 @@ func ReloadUserUnits(ctx context.Context, r Runner, user string, uid int) error 
 	return nil
 }
 
+// userInstanceWaitTries は起動を待つ回数。テストから縮められるよう変数にしてある。
+var userInstanceWaitTries = 30
+
 // waitUserInstance はユーザの systemd インスタンスが立ち上がるのを待つ。
 func waitUserInstance(ctx context.Context, r Runner, uid int) error {
 	unit := fmt.Sprintf("user@%d.service", uid)
 	// linger を入れた直後は自動起動を待つより明示的に始める方が速く確実。
 	_, _ = r.Run(ctx, nil, "systemctl", "start", unit)
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < userInstanceWaitTries; i++ {
 		if _, err := r.Run(ctx, nil, "systemctl", "is-active", "--quiet", unit); err == nil {
 			// bus のソケットが現れるまでにさらに一拍ある。
 			if _, err := os.Stat(fmt.Sprintf("/run/user/%d/bus", uid)); err == nil {
