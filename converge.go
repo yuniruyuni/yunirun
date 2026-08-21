@@ -149,31 +149,36 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	}
 
 	names := system.NamesFor(name)
-	vault := system.Vault{
-		Dir:            filepath.Join(cfg.StateDir, "secrets", name),
-		HostKeyPath:    cfg.HostKeyPath,
-		HostRecipient:  hostRecipient,
-		AdminRecipient: cfg.AdminRecipient,
-		Runner:         r,
-	}
-	owner, app, err := ensureDBPasswords(ctx, vault, names)
-	if err != nil {
-		return render.App{}, err
-	}
-	if err := system.EnsureDatabase(ctx, r, names, owner, app); err != nil {
-		return render.App{}, err
-	}
-
-	// 秘密を tmpfs へ展開する。runtime 用には app パスワードだけを入れ、
-	// owner パスワードは root しか読めない別ファイルに置く。これで runtime は
-	// owner の資格情報を構造的に持てない。
 	runtimeEnv := filepath.Join(runtimeDir, name, "runtime.env")
-	if err := writeEnvFile(runtimeEnv, map[string]string{"DB_PASSWORD": app}, a.UID, a.GID); err != nil {
-		return render.App{}, err
-	}
 	migrationEnv := filepath.Join(runtimeDir, name, "migration.env")
-	if err := writeEnvFile(migrationEnv, map[string]string{"DB_PASSWORD": owner}, 0, 0); err != nil {
-		return render.App{}, err
+
+	// DB を使わないアプリには作らない。作ると消し忘れた資源が溜まるうえ、
+	// 不要な資格情報が生成される。
+	if m.App.Database {
+		vault := system.Vault{
+			Dir:            filepath.Join(cfg.StateDir, "secrets", name),
+			HostKeyPath:    cfg.HostKeyPath,
+			HostRecipient:  hostRecipient,
+			AdminRecipient: cfg.AdminRecipient,
+			Runner:         r,
+		}
+		owner, app, err := ensureDBPasswords(ctx, vault, names)
+		if err != nil {
+			return render.App{}, err
+		}
+		if err := system.EnsureDatabase(ctx, r, names, owner, app); err != nil {
+			return render.App{}, err
+		}
+
+		// 秘密を tmpfs へ展開する。runtime 用には app パスワードだけを入れ、
+		// owner パスワードは root しか読めない別ファイルに置く。これで runtime は
+		// owner の資格情報を構造的に持てない。
+		if err := writeEnvFile(runtimeEnv, map[string]string{"DB_PASSWORD": app}, a.UID, a.GID); err != nil {
+			return render.App{}, err
+		}
+		if err := writeEnvFile(migrationEnv, map[string]string{"DB_PASSWORD": owner}, 0, 0); err != nil {
+			return render.App{}, err
+		}
 	}
 
 	// deploy が読むための情報を tmpfs へ置く。
@@ -194,9 +199,11 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		Alloc:    a,
 		Manifest: m,
 		LocalTag: "localhost/" + name + ":current",
-		DBName:   names.Database,
-		DBUser:   names.App,
-		EnvFile:  runtimeEnv,
+	}
+	if m.App.Database {
+		ra.DBName = names.Database
+		ra.DBUser = names.App
+		ra.EnvFile = runtimeEnv
 	}
 
 	units := map[string]string{}

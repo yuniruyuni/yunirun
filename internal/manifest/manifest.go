@@ -41,6 +41,12 @@ type App struct {
 	Port int `json:"port"`
 	// Health は HAProxy が叩くパス。
 	Health string `json:"health"`
+
+	// Database はこのアプリが PostgreSQL を使うか。
+	//
+	// 使わないアプリに DB とロールを作ると、消し忘れた資源が溜まるうえ
+	// 不要な資格情報が生成される。既定は false で、必要なアプリだけが宣言する。
+	Database bool `json:"database"`
 }
 
 // Workload はアプリ本体以外の実行単位。

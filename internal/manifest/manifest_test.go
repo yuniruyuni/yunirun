@@ -89,3 +89,25 @@ func TestParseRejectsOutOfRangePort(t *testing.T) {
 		t.Fatal("範囲外のポートを受け入れてしまった")
 	}
 }
+
+// DB を使わないアプリに DB とロールを作ると、消し忘れた資源が溜まるうえ
+// 不要な資格情報が生成される。既定は「使わない」。
+func TestDatabaseIsOptOutByDefault(t *testing.T) {
+	m, err := Parse([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.App.Database {
+		t.Fatal("宣言していないのに DB を使うことになっている")
+	}
+}
+
+func TestDatabaseCanBeDeclared(t *testing.T) {
+	m, err := Parse([]byte(`{"app":{"database":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.App.Database {
+		t.Fatal("宣言が反映されていない")
+	}
+}
