@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/tidwall/jsonc"
 )
@@ -41,6 +42,12 @@ type App struct {
 	Port int `json:"port"`
 	// Health は HAProxy が叩くパス。
 	Health string `json:"health"`
+
+	// Env は秘密でない環境変数。
+	//
+	// OAuth の client_id のように仕様上公開される値や、アプリ自身の URL など。
+	// 秘密は Secrets 側に書く。
+	Env map[string]string `json:"env"`
 
 	// Secrets は環境変数名から、その値を持つ秘密の名前への対応。
 	//
@@ -144,6 +151,16 @@ func (m *Manifest) validate() error {
 		}
 		if !secretRE.MatchString(secret) {
 			return fmt.Errorf("秘密の名前に使えない文字が含まれています: %q", secret)
+		}
+	}
+	for env, v := range m.App.Env {
+		if !envRE.MatchString(env) {
+			return fmt.Errorf("環境変数名に使えない文字が含まれています: %q", env)
+		}
+		// 値は unit ファイルの 1 行として書き出す。改行が入ると別の設定行を
+		// 差し込める。
+		if strings.ContainsAny(v, "\r\n") {
+			return fmt.Errorf("環境変数 %s の値に改行が含まれています", env)
 		}
 	}
 	for env, secret := range m.App.Secrets {

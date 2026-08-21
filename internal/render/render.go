@@ -64,6 +64,12 @@ func ContainerUnit(a App, color string) string {
 	p("PublishPort=127.0.0.1:%d:%d", a.Port(color), a.Manifest.App.Port)
 	p("Environment=PORT=%d", a.Manifest.App.Port)
 
+	// 秘密でない環境変数。値はマニフェストに書かれたものをそのまま渡す。
+	// 秘密は EnvironmentFile 経由なのでここには現れない。
+	for _, k := range sortedKeys(a.Manifest.App.Env) {
+		p("Environment=%s=%s", k, a.Manifest.App.Env[k])
+	}
+
 	if a.DBName != "" {
 		// PostgreSQL へは TCP ではなく Unix ソケットで繋ぐ。コンテナは独立した
 		// netns にいるので、これによりホストの loopback 上の他サービスへは
@@ -146,6 +152,19 @@ func HAProxy(apps []App) string {
 		}
 	}
 	return b.String()
+}
+
+// sortedKeys は map の鍵を名前順で返す。
+//
+// 生成を決定的にするため。map の反復順に任せると、内容が同じでも converge の
+// たびに unit が書き換わって無用な再起動を招く。
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // WorkloadUnit はアプリ本体以外のワークロードの .container を組み立てる。

@@ -65,10 +65,36 @@ func TestContainerUnitOmitsDatabaseWhenUnused(t *testing.T) {
 	}
 }
 
+func TestContainerUnitIncludesDeclaredEnv(t *testing.T) {
+	a := sample()
+	m, _ := manifest.Parse([]byte(`{"app":{"env":{"APP_URL":"https://x.example","B":"2"}}}`))
+	a.Manifest = m
+	got := ContainerUnit(a, "blue")
+	if !strings.Contains(got, "Environment=APP_URL=https://x.example") {
+		t.Fatalf("宣言した env が出ていない:\n%s", got)
+	}
+}
+
+// 秘密は EnvironmentFile 経由で渡す。unit に値が出ると、unit を読める相手に
+// 秘密が渡る。
+func TestContainerUnitKeepsSecretsOutOfTheUnitFile(t *testing.T) {
+	a := sample()
+	m, _ := manifest.Parse([]byte(`{"app":{"secrets":{"TOKEN":"some-secret"}}}`))
+	a.Manifest = m
+	got := ContainerUnit(a, "blue")
+	// 秘密の名前すら unit には出さない (値は当然出さない)。
+	if strings.Contains(got, "TOKEN=") {
+		t.Fatalf("秘密が unit に現れている:\n%s", got)
+	}
+}
+
 func TestContainerUnitIsStableAcrossRuns(t *testing.T) {
 	// 生成が非決定的だと、内容が同じでも converge のたびに unit が書き換わり
 	// 無用な再起動を招く。map の反復順に引きずられないことを確かめる。
 	a := sample()
+	// 反復順に引きずられないことを確かめるため、複数の env を入れる。
+	m, _ := manifest.Parse([]byte(`{"app":{"env":{"C":"3","A":"1","B":"2"}}}`))
+	a.Manifest = m
 	first := ContainerUnit(a, "blue")
 	for i := 0; i < 20; i++ {
 		if ContainerUnit(a, "blue") != first {
