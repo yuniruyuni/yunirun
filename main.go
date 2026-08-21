@@ -31,6 +31,9 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 		return
+	case "--version", "version":
+		fmt.Println("yunirun", version)
+		return
 	default:
 		fmt.Fprintf(os.Stderr, "不明なコマンド: %s\n\n", os.Args[1])
 		usage()
@@ -41,6 +44,9 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// version はビルド時に ldflags で埋める。
+var version = "dev"
 
 func usage() {
 	fmt.Fprint(os.Stderr, `yunirun - VPS 上でコンテナ化したアプリを動かす

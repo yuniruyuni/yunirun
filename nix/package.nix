@@ -10,9 +10,13 @@ buildGoModule (finalAttrs: {
 
   src = lib.cleanSource ../.;
 
-  vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  vendorHash = "sha256-326rQNHnIqyodsVe//Qp5TNTd07elNlY8Xp4ZJThnEk=";
 
-  ldflags = [ "-s" "-w" ];
+  ldflags = [
+    "-s"
+    "-w"
+    "-X=main.version=${finalAttrs.version}"
+  ];
 
   # 実行時に呼ぶ外部コマンド (podman / psql / age / systemctl / curl) は
   # 意図的に PATH 解決に任せている。NixOS モジュール側で systemd の path を
@@ -20,7 +24,7 @@ buildGoModule (finalAttrs: {
 
   nativeInstallCheckInputs = [ versionCheckHook ];
   doInstallCheck = true;
-  versionCheckProgramArg = "--help";
+  versionCheckProgramArg = "--version";
 
   meta = {
     description = "yuniruyuni.net の VPS 上でコンテナ化したアプリを動かす小さなデプロイシステム";
