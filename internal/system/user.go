@@ -17,14 +17,22 @@ import (
 // 依存させないため。mutableUsers の既定が true なので rebuild でも消えない。
 func EnsureUser(ctx context.Context, r Runner, name string, a alloc.Alloc, home string) error {
 	if u, err := user.Lookup(name); err == nil {
-		// ホームの場所が変わったら追従する。既存ユーザを作り直すと uid が
-		// 変わってファイルの所有者がずれるので、変更だけを当てる。
+		// ホームの場所が食い違っていても自動では直さない。
+		//
+		// usermod は linger でユーザのプロセスが動いていると
+		// "user is currently used by process" で失敗する。通すにはアプリを
+		// 止める必要があり、収束のために稼働中のサービスを落とすのは本末転倒。
+		//
+		// 新規ユーザは最初から正しい場所に作られるので、これが起きるのは
+		// yunirun 自身の設定を変えた直後だけ。手で直す前提にして、気づけるよう
+		// エラーにする。
 		if u.HomeDir != home {
-			if _, err := r.Run(ctx, nil, "usermod", "--home", home, "--move-home", name); err != nil {
-				return fmt.Errorf("%s のホームを %s へ移せません: %w", name, home, err)
-			}
+			return fmt.Errorf(
+				"%s のホームが %s ですが %s であるべきです。"+
+					"linger を止めてから usermod で変更してください",
+				name, u.HomeDir, home)
 		}
-		return nil
+		return ensureHome(home, a)
 	}
 	// グループを先に作る。uid と同じ番号にして、他ユーザとグループを共有しない。
 	// 共有すると、そのグループに付けた読み取り権限が意図しない相手へ渡る。
@@ -42,6 +50,17 @@ func EnsureUser(ctx context.Context, r Runner, name string, a alloc.Alloc, home 
 		name,
 	); err != nil {
 		return fmt.Errorf("ユーザ %s を作れません: %w", name, err)
+	}
+	return nil
+}
+
+// ensureHome はホームを作り、所有者を合わせる。
+func ensureHome(home string, a alloc.Alloc) error {
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chown(home, a.UID, a.GID); err != nil {
+		return fmt.Errorf("%s の所有者を移せません: %w", home, err)
 	}
 	return nil
 }
