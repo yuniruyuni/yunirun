@@ -51,6 +51,13 @@ type App struct {
 	// 置かないという方針のため。アプリ側は名前だけを知っていればよい。
 	Secrets map[string]string `json:"secrets"`
 
+	// DatabaseName は使う DB の名前。空ならアプリ名を使う。
+	//
+	// 既存の DB を引き継ぐ場合に指定する。yuniruyuni.net 側で付けるアプリ名と、
+	// 既に動いている DB の名前が食い違うことがあるため。名前が揃っていれば
+	// 書かなくてよい。
+	DatabaseName string `json:"databaseName"`
+
 	// Database はこのアプリが PostgreSQL を使うか。
 	//
 	// 使わないアプリに DB とロールを作ると、消し忘れた資源が溜まるうえ
@@ -83,6 +90,7 @@ var (
 	nameRE   = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 	envRE    = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 	secretRE = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
+	dbNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 
 // Load は path から読む。ファイルが無い場合は既定値だけの Manifest を返す。
@@ -114,6 +122,10 @@ func Parse(b []byte) (*Manifest, error) {
 func (m *Manifest) validate() error {
 	if m.App.Port < 0 || m.App.Port > 65535 {
 		return fmt.Errorf("app.port が範囲外です: %d", m.App.Port)
+	}
+	if m.App.DatabaseName != "" && !dbNameRE.MatchString(m.App.DatabaseName) {
+		// DB 名は SQL とファイルパスの両方に現れる。
+		return fmt.Errorf("DB 名に使えない文字が含まれています: %q", m.App.DatabaseName)
 	}
 	for env, secret := range m.App.Secrets {
 		// 環境変数名は unit ファイルへ書き出す。

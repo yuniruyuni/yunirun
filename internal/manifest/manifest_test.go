@@ -157,3 +157,32 @@ func TestEnvNameRejectsInjection(t *testing.T) {
 		}
 	}
 }
+
+// 既存の DB を引き継ぐとき、yuniruyuni.net 側のアプリ名と DB 名が食い違う。
+// 名前が揃っていれば書かなくてよい。
+func TestDatabaseNameDefaultsToAppNameButCanBeOverridden(t *testing.T) {
+	m, err := Parse([]byte(`{"app":{"database":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.App.DatabaseName != "" {
+		t.Fatalf("既定は空 (アプリ名を使う) であるべき: %q", m.App.DatabaseName)
+	}
+
+	m2, err := Parse([]byte(`{"app":{"database":true,"databaseName":"streamer_post"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.App.DatabaseName != "streamer_post" {
+		t.Fatalf("指定が反映されていない: %q", m2.App.DatabaseName)
+	}
+}
+
+// DB 名は SQL とファイルパスの両方に現れる。
+func TestDatabaseNameRejectsUnsafeCharacters(t *testing.T) {
+	for _, bad := range []string{"a-b", "A", "1x", "a b", "a;drop", "../x"} {
+		if _, err := Parse([]byte(`{"app":{"databaseName":"` + bad + `"}}`)); err == nil {
+			t.Fatalf("DB 名 %q を受け入れてしまった", bad)
+		}
+	}
+}

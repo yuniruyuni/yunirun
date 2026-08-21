@@ -151,7 +151,14 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		return render.App{}, err
 	}
 
-	names := system.NamesFor(name)
+	// DB 名はアプリ名から導くが、既存の DB を引き継ぐ場合はマニフェストで
+	// 指定できる。yuniruyuni.net 側で付ける名前と、既に動いている DB の名前が
+	// 食い違うことがあるため。
+	dbName := name
+	if m.App.DatabaseName != "" {
+		dbName = m.App.DatabaseName
+	}
+	names := system.NamesFor(dbName)
 	runtimeEnv := filepath.Join(runtimeDir, name, "runtime.env")
 	migrationEnv := filepath.Join(runtimeDir, name, "migration.env")
 
