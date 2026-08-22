@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -86,4 +87,60 @@ func runPsql(ctx context.Context, r Runner, db, sql string) ([]byte, error) {
 	return r.Run(ctx, []byte(sql),
 		"runuser", "-u", "postgres", "--",
 		"psql", "-v", "ON_ERROR_STOP=1", "-d", db)
+}
+
+// VerifyAppGrants は、アプリのロールが実際にテーブルを使えることを確かめる。
+//
+// schema は宣言側 (各リポジトリの .sql) が GRANT を書くが、そこに書かれた
+// ロール名と yunirun が作るロール名が食い違っていても、pgschema は自分が
+// 作ったロールへ淡々と GRANT するだけで成功してしまう。結果、アプリが接続する
+// ロールは何の権限も持たないまま起動する。
+//
+// これは静かに壊れる。健康確認の経路が DB を触らなければ 200 を返し続け、
+// 実際に露見するのは DB を使う画面を誰かが開いたときになる。
+//
+// テーブルが 1 つも無いなら何も言わない (最初の migration より前)。
+// テーブルがあるのにアプリのロールがどれ 1 つ触れないなら、それは設定の
+// 食い違いであって正常な状態ではない。個々のテーブルまでは見ない。
+// 意図して runtime に見せないテーブルはありうる。
+func VerifyAppGrants(ctx context.Context, r Runner, n DBNames) error {
+	const q = `SELECT count(*), count(*) FILTER (
+	  WHERE has_table_privilege($ROLE$%s$ROLE$, c.oid, 'SELECT')
+	     OR has_table_privilege($ROLE$%s$ROLE$, c.oid, 'INSERT'))
+	FROM pg_class c
+	WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r';`
+
+	out, err := runPsql(ctx, r, n.Database,
+		"-- verify\n"+fmt.Sprintf("\\pset tuples_only on\n\\pset format unaligned\n"+q, n.App, n.App))
+	if err != nil {
+		return fmt.Errorf("%s の権限を確認できません: %w", n.Database, err)
+	}
+	total, granted, err := parseGrantCounts(string(out))
+	if err != nil {
+		return err
+	}
+	if total > 0 && granted == 0 {
+		return fmt.Errorf(
+			"%s に %d 個のテーブルがありますが、ロール %s はどれにも権限を持っていません。"+
+				"schema 側の GRANT 先のロール名が %s と一致しているか確認してください",
+			n.Database, total, n.App, n.App)
+	}
+	return nil
+}
+
+// parseGrantCounts は psql の unaligned 出力から 2 つの数を取り出す。
+func parseGrantCounts(out string) (total, granted int, err error) {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		f := strings.Split(strings.TrimSpace(line), "|")
+		if len(f) != 2 {
+			continue
+		}
+		t, e1 := strconv.Atoi(strings.TrimSpace(f[0]))
+		g, e2 := strconv.Atoi(strings.TrimSpace(f[1]))
+		if e1 != nil || e2 != nil {
+			continue
+		}
+		return t, g, nil
+	}
+	return 0, 0, fmt.Errorf("権限の確認結果を読み取れません: %q", out)
 }
