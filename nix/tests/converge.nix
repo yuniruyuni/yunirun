@@ -49,6 +49,9 @@ pkgs.testers.runNixOSTest {
     # (Incorrect padding)。journal には残るので調査には困らない。
     services.journald.extraConfig = "ForwardToConsole=no";
 
+    # 判定をゲストの中で行うために使う。
+    environment.systemPackages = [ pkgs.jq ];
+
     services.yunirun = {
       enable = true;
       domain = "example.test";
@@ -82,24 +85,32 @@ pkgs.testers.runNixOSTest {
         machine.succeed("id yunirun-beta")
 
     with subtest("宣言した認可先がそのまま auth_id に落ちる"):
-        auth = machine.succeed("cat /etc/opk/auth_id")
-        assert "yunirun-alpha repo:example/alpha:ref:refs/heads/main" in auth, auth
-        assert "yunirun-beta repo:example@42/beta@7:environment:production" in auth, auth
+        machine.succeed(
+            "grep -qF 'yunirun-alpha repo:example/alpha:ref:refs/heads/main'"
+            " /etc/opk/auth_id"
+        )
+        machine.succeed(
+            "grep -qF 'yunirun-beta repo:example@42/beta@7:environment:production'"
+            " /etc/opk/auth_id"
+        )
 
     with subtest("repo から認可先を作らない"):
         # かつては repo から repo:<owner>/<repo>:ref:refs/heads/main を
         # 導出していた。beta の repo は example/beta なので、導出が残って
         # いればこの文字列が現れる。認可を勝手に広げないことを見る。
-        auth = machine.succeed("cat /etc/opk/auth_id")
-        assert "repo:example/beta:ref" not in auth, auth
+        machine.succeed("! grep -qF 'repo:example/beta:ref' /etc/opk/auth_id")
 
     with subtest("DB は宣言が無ければ作られない"):
         # マニフェストをまだ受け取っていないので database の宣言も無い。
         # 使わないアプリに DB を作ると消し忘れた資源が溜まる。
-        out = machine.succeed(
-            "sudo -u postgres psql -tAc \"select count(*) from pg_database where datname='alpha'\""
+        #
+        # 判定はゲストの中で完結させる。出力を持ち帰って照合すると、
+        # ドライバとの受け渡しが稀に壊れたときに、中身ではなく経路のせいで
+        # 落ちる (実際 MAo= という base64 のまま返って落ちたことがある)。
+        machine.succeed(
+            "! sudo -u postgres psql -tAc"
+            " \"select 1 from pg_database where datname='alpha'\" | grep -q 1"
         )
-        assert out.strip() == "0", f"DB が作られている: {out}"
 
     with subtest("unit が置かれる"):
         machine.succeed("test -f /var/lib/yunirun-apps/alpha/.config/containers/systemd/alpha-blue.container")
@@ -119,10 +130,14 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds("ss -tln | grep -q 127.0.0.1:8110")
 
     with subtest("収束は冪等"):
-        before = machine.succeed("cat /var/lib/yunirun/allocations.json")
+        # 比較もゲストの中で行う。中身をドライバへ運ぶ必要が無い。
+        machine.succeed("cp /var/lib/yunirun/allocations.json /tmp/before.json")
         machine.succeed("systemctl restart yunirun-converge.service")
-        after = machine.succeed("cat /var/lib/yunirun/allocations.json")
-        assert before == after, "再実行で割り当てが変わった"
+        machine.succeed(
+            "cmp -s /tmp/before.json /var/lib/yunirun/allocations.json"
+            " || { echo '再実行で割り当てが変わった'; diff /tmp/before.json"
+            " /var/lib/yunirun/allocations.json; exit 1; }"
+        )
 
     with subtest("前提が実際の環境で成り立っている"):
         # yunirun は外部システムの挙動に多く依存している。実際に踏んだ不具合の
@@ -137,18 +152,25 @@ pkgs.testers.runNixOSTest {
         # 名前順のインデックスから導出していた頃、アルファベット順で前に入る
         # 名前を足すと既存アプリの uid とポートが全てずれた。稼働中の
         # コンテナは旧ポートのままで HAProxy は新ポートを見るため停止する。
-        import json
-        before = json.loads(machine.succeed("cat /var/lib/yunirun/allocations.json"))
+        led = "/var/lib/yunirun/allocations.json"
+        machine.succeed(f"jq -S '.entries.alpha' {led} > /tmp/alpha-before.json")
         machine.succeed(
-            "sed -i 's|\"alpha\":|\"aaa\": \"example/aaa\", \"alpha\":|' /etc/yunirun/config.json"
+            "sed -i 's|\"alpha\":|\"aaa\": \"example/aaa\", \"alpha\":|'"
+            " /etc/yunirun/config.json"
         )
         machine.succeed("yunirun converge")
-        after = json.loads(machine.succeed("cat /var/lib/yunirun/allocations.json"))
-        assert after["entries"]["alpha"] == before["entries"]["alpha"], (
-            f"既存の割り当てが動いた: {before['entries']['alpha']} -> {after['entries']['alpha']}"
+
+        # 既存の割り当てが 1 バイトも動いていないこと。
+        machine.succeed(
+            f"jq -S '.entries.alpha' {led} > /tmp/alpha-after.json;"
+            " cmp -s /tmp/alpha-before.json /tmp/alpha-after.json"
+            " || { echo '既存の割り当てが動いた';"
+            " diff /tmp/alpha-before.json /tmp/alpha-after.json; exit 1; }"
         )
-        assert after["entries"]["aaa"]["UID"] != before["entries"]["alpha"]["UID"], (
-            "新規アプリが既存の番号を奪った"
+        # 新規アプリが既存の番号を奪っていないこと。
+        machine.succeed(
+            f"test \"$(jq '.entries.aaa.UID' {led})\""
+            f" != \"$(jq '.entries.alpha.UID' {led})\""
         )
   '';
 }
