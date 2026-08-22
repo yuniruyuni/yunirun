@@ -276,6 +276,7 @@ func workloadSpec(cfg *config.Config, app, name string, w manifest.Workload,
 		EnvFile:  runtimeEnv,
 		DBUser:   n.App,
 		Schedule: w.Schedule,
+		Env:      w.Env,
 	}
 	if w.Role == manifest.RoleOwner {
 		spec.EnvFile = migrationEnv

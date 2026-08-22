@@ -231,3 +231,36 @@ func TestWorkloadUnitKeepsSecretsInTheEnvFile(t *testing.T) {
 		t.Fatalf("EnvironmentFile が無い:\n%s", out)
 	}
 }
+
+// 同じバイナリでも入口が違えば適切な値が違う。fighter の cleanup は接続
+// プールを 1 に絞り、文が長いので statement timeout を伸ばす。
+func TestWorkloadEnvOverridesTheAppEnv(t *testing.T) {
+	a := App{
+		Name:   "fighter",
+		DBName: "fighter",
+		Manifest: &manifest.Manifest{App: manifest.App{
+			Env: map[string]string{"PGPOOL_MAX": "5", "SHARE_RETENTION_DAYS": "30"},
+		}},
+	}
+	out := WorkloadUnit(a, "cleanup", WorkloadSpec{
+		Image: "x", DBUser: "fighter_app",
+		Env: map[string]string{"PGPOOL_MAX": "1", "CLEANUP_BATCH_SIZE": "500"},
+	})
+	// systemd は同じ名前が複数あれば後のものを採る。順序が逆になっていないか。
+	app := strings.Index(out, "Environment=PGPOOL_MAX=5")
+	own := strings.Index(out, "Environment=PGPOOL_MAX=1")
+	if app < 0 || own < 0 {
+		t.Fatalf("両方の宣言が要る:\n%s", out)
+	}
+	if own < app {
+		t.Fatalf("ワークロード固有の値が先に来ている。上書きにならない:\n%s", out)
+	}
+	for _, want := range []string{
+		"Environment=SHARE_RETENTION_DAYS=30",
+		"Environment=CLEANUP_BATCH_SIZE=500",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("%q が無い:\n%s", want, out)
+		}
+	}
+}
