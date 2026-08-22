@@ -69,14 +69,18 @@ pkgs.testers.runNixOSTest {
     machine.succeed("yunirun converge")
 
     with subtest("DB とロールが作られる"):
-        out = machine.succeed(
-            "sudo -u postgres psql -tAc \"select count(*) from pg_database where datname='beta'\""
+        # 判定はゲストの中で完結させる。出力を持ち帰って照合すると、
+        # ドライバとの受け渡しが稀に壊れたときに、中身ではなく経路のせいで
+        # 落ちる (実際 base64 のまま返って落ちたことがある)。
+        machine.succeed(
+            "sudo -u postgres psql -tAc"
+            " \"select 1 from pg_database where datname='beta'\" | grep -q 1"
         )
-        assert out.strip() == "1", f"DB が無い: {out}"
-        roles = machine.succeed(
-            "sudo -u postgres psql -tAc \"select rolname from pg_roles where rolname like 'beta%' order by 1\""
-        )
-        assert "beta" in roles and "beta_app" in roles, f"ロールが足りない: {roles}"
+        for role in ["beta", "beta_app"]:
+            machine.succeed(
+                "sudo -u postgres psql -tAc"
+                f" \"select 1 from pg_roles where rolname='{role}'\" | grep -q 1"
+            )
 
     with subtest("owner パスワードはアプリのユーザから読めない"):
         # これが per-workload 分離の要。runtime が owner の資格情報を持てると、
@@ -87,34 +91,37 @@ pkgs.testers.runNixOSTest {
         machine.succeed("sudo -u yunirun-beta test -r /run/yunirun/beta/runtime.env")
 
     with subtest("app ロールは DDL を実行できない"):
-        pw = machine.succeed(
-            "grep -oP '(?<=DB_PASSWORD=).*' /run/yunirun/beta/runtime.env"
-        ).strip()
+        # パスワードはゲストの中だけで扱う。ドライバへ持ち帰ると、テストの
+        # 出力や失敗時の表示に平文で乗る。
+        conn = (
+            "PGPASSWORD=$(grep -oP '(?<=DB_PASSWORD=).*'"
+            " /run/yunirun/beta/runtime.env)"
+            " psql -h /run/postgresql -U beta_app -d beta -tAc"
+        )
         # 接続はできる。
-        machine.succeed(
-            f"PGPASSWORD='{pw}' psql -h /run/postgresql -U beta_app -d beta -tAc 'select 1'"
-        )
+        machine.succeed(f"{conn} 'select 1'")
         # DDL はできない。pgschema が宣言する権限だけを持つ。
-        machine.fail(
-            f"PGPASSWORD='{pw}' psql -h /run/postgresql -U beta_app -d beta -tAc 'CREATE TABLE t(x int)'"
-        )
+        machine.fail(f"{conn} 'CREATE TABLE t(x int)'")
 
     with subtest("per-table GRANT を撒いていない"):
         # 撒くと pgschema に毎回 REVOKE され、次の収束で復活する振動になる。
         # その間アプリは permission denied になる。
         # SQL で空文字列リテラルを使わない書き方にしてある。testScript は Nix の
         # 複数行文字列なので、単引用符を 2 つ並べると文字列終端と解釈される。
-        acl = machine.succeed(
-            "sudo -u postgres psql -d beta -tAc \"select count(*) from pg_default_acl\""
+        machine.succeed(
+            "! sudo -u postgres psql -d beta -tAc"
+            " \"select 1 from pg_default_acl\" | grep -q 1"
         )
-        assert acl.strip() == "0", f"ALTER DEFAULT PRIVILEGES を発行している: {acl}"
 
     with subtest("パスワードは再収束で変わらない"):
         # 作り直すと DB 側と食い違い、稼働中のコンテナが認証に失敗する。
-        before = machine.succeed("cat /run/yunirun/beta/runtime.env")
+        # 比較もゲストの中で行う。パスワードを持ち出さずに済む。
+        machine.succeed("cp /run/yunirun/beta/runtime.env /tmp/before.env")
         machine.succeed("yunirun converge")
-        after = machine.succeed("cat /run/yunirun/beta/runtime.env")
-        assert before == after, "再収束でパスワードが変わった"
+        machine.succeed(
+            "cmp -s /tmp/before.env /run/yunirun/beta/runtime.env"
+            " || { echo '再収束でパスワードが変わった'; exit 1; }"
+        )
 
     with subtest("秘密は管理者鍵でも復号できる"):
         # ホストを失ったときの復旧経路。これが無いと DB へ入れなくなる。
