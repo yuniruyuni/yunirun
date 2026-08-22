@@ -88,3 +88,48 @@ func TestReloadUserUnitsWaitsForTheUserInstanceFirst(t *testing.T) {
 		}
 	}
 }
+
+// .timer を Quadlet のディレクトリへ置いても効かない。Quadlet は自分が知る
+// 種類しか処理せず、それ以外は無視するので、systemd からは見えないファイルが
+// 1 つ増えるだけになる。実際 fighter の cleanup がこれで動かなかった。
+func TestWriteUnitsPutsTimersWhereSystemdLooks(t *testing.T) {
+	home := t.TempDir()
+	err := WriteUnits(home, os.Getuid(), os.Getgid(), map[string]string{
+		"fighter-blue.container":    "[Container]\n",
+		"fighter-cleanup.container": "[Container]\n",
+		"fighter-cleanup.timer":     "[Timer]\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(UnitDir(home), "fighter-cleanup.timer")); err == nil {
+		t.Fatal("timer が Quadlet のディレクトリに置かれている。systemd からは見えない")
+	}
+	for _, p := range []string{
+		filepath.Join(SystemdUserDir(home), "fighter-cleanup.timer"),
+		filepath.Join(UnitDir(home), "fighter-blue.container"),
+		filepath.Join(UnitDir(home), "fighter-cleanup.container"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s が無い: %v", p, err)
+		}
+	}
+}
+
+// enable が作る timers.target.wants を消してはいけない。消すと timer が
+// 無効に戻り、次の収束まで動かない。
+func TestWriteUnitsKeepsSystemdOwnedDirectories(t *testing.T) {
+	home := t.TempDir()
+	wants := filepath.Join(SystemdUserDir(home), "timers.target.wants")
+	if err := os.MkdirAll(wants, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteUnits(home, os.Getuid(), os.Getgid(), map[string]string{
+		"a-cleanup.timer": "[Timer]\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(wants); err != nil {
+		t.Fatalf("timers.target.wants を消している: %v", err)
+	}
+}

@@ -97,6 +97,15 @@ pkgs.testers.runNixOSTest {
     with subtest("HAProxy が起動する"):
         machine.wait_for_unit("yunirun-haproxy.service")
 
+    with subtest("HAProxy は書いた設定を実際に配っている"):
+        # 設定を書くだけで読み直させないと、ディスク上の内容と動いている
+        # 内容が食い違ったまま気付けない。宣言したアプリの frontend が
+        # 実際に listen されていることで確かめる。
+        for app in ["alpha", "beta"]:
+            machine.succeed(f"grep -q 'frontend {app}_in' /etc/yunirun/haproxy.cfg")
+        machine.wait_until_succeeds("ss -tln | grep -q 127.0.0.1:8100")
+        machine.wait_until_succeeds("ss -tln | grep -q 127.0.0.1:8110")
+
     with subtest("収束は冪等"):
         before = machine.succeed("cat /var/lib/yunirun/allocations.json")
         machine.succeed("systemctl restart yunirun-converge.service")

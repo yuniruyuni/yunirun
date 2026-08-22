@@ -6,12 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // UnitDir は Quadlet が rootless ユーザの定義を探す場所を返す。
 func UnitDir(home string) string {
 	return filepath.Join(home, ".config", "containers", "systemd")
+}
+
+// SystemdUserDir は systemd がユーザの unit を探す場所を返す。
+//
+// Quadlet のディレクトリとは別。Quadlet は自分が知る種類 (.container,
+// .volume, .network, .pod など) しか処理せず、それ以外のファイルは無視する。
+// .timer をそこへ置いても systemd からは見えない。
+func SystemdUserDir(home string) string {
+	return filepath.Join(home, ".config", "systemd", "user")
 }
 
 // WriteUnits は unit ファイル群をユーザのホームへ書き出す。
@@ -28,11 +38,40 @@ func UnitDir(home string) string {
 //
 // で起動できなくなった。
 func WriteUnits(home string, uid, gid int, units map[string]string) error {
-	dir := UnitDir(home)
+	// .timer は Quadlet のディレクトリへ置いても効かない。Quadlet は自分が
+	// 知る種類しか処理せず、それ以外は無視するため、systemd からは見えない
+	// ファイルが 1 つ増えるだけになる。置き場所で振り分ける。
+	quadlet := map[string]string{}
+	plain := map[string]string{}
+	for name, content := range units {
+		if strings.HasSuffix(name, ".container") ||
+			strings.HasSuffix(name, ".volume") ||
+			strings.HasSuffix(name, ".network") ||
+			strings.HasSuffix(name, ".pod") ||
+			strings.HasSuffix(name, ".build") ||
+			strings.HasSuffix(name, ".image") ||
+			strings.HasSuffix(name, ".kube") {
+			quadlet[name] = content
+			continue
+		}
+		plain[name] = content
+	}
+	if err := writeUnitDir(home, UnitDir(home), uid, gid, quadlet); err != nil {
+		return err
+	}
+	return writeUnitDir(home, SystemdUserDir(home), uid, gid, plain)
+}
+
+// writeUnitDir は 1 つのディレクトリを宣言どおりの中身にする。
+func writeUnitDir(home, dir string, uid, gid int, units map[string]string) error {
 	// home からの各段を順に作り、そのつど所有者を移す。
-	rel := []string{".config", filepath.Join(".config", "containers"), filepath.Join(".config", "containers", "systemd")}
-	for _, r := range rel {
-		p := filepath.Join(home, r)
+	rel, err := filepath.Rel(home, dir)
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	for i := range parts {
+		p := filepath.Join(append([]string{home}, parts[:i+1]...)...)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return err
 		}
@@ -48,6 +87,11 @@ func WriteUnits(home string, uid, gid int, units map[string]string) error {
 		return err
 	}
 	for _, e := range entries {
+		// timers.target.wants のような systemd が作る symlink 置き場は
+		// 触らない。enable した結果がここに入る。
+		if e.IsDir() {
+			continue
+		}
 		if _, keep := units[e.Name()]; !keep {
 			if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
 				return err
@@ -120,4 +164,26 @@ func waitUserInstance(ctx context.Context, r Runner, uid int) error {
 		}
 	}
 	return fmt.Errorf("%s が起動しませんでした", unit)
+}
+
+// EnableUserTimers は timer を有効にして起動する。
+//
+// ファイルを置いて daemon-reload しただけでは timer は動かない。
+// timers.target.wants への symlink が要り、それを作るのが enable。
+// --now を付けて、次の収束を待たずにその場で起動させる。
+func EnableUserTimers(ctx context.Context, r Runner, uid int, timers []string) error {
+	if len(timers) == 0 {
+		return nil
+	}
+	args := []string{
+		"--uid", strconv.Itoa(uid),
+		"--setenv", "XDG_RUNTIME_DIR=/run/user/" + strconv.Itoa(uid),
+		"--pipe", "--wait", "--quiet", "--collect",
+		"systemctl", "--user", "enable", "--now",
+	}
+	args = append(args, timers...)
+	if _, err := r.Run(ctx, nil, "systemd-run", args...); err != nil {
+		return fmt.Errorf("timer を有効にできません: %w", err)
+	}
+	return nil
 }
