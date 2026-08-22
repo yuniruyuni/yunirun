@@ -23,10 +23,18 @@ let
 
   # opkssh に渡す identity。GitHub OIDC の sub と完全一致する必要がある。
   #
-  # 既定は素の repo:<owner>/<repo>:ref:refs/heads/main。ただしリポジトリが
-  # sub claim をカスタマイズしていると前半が変わり (数値 id を含む形など)、
-  # job に environment: が付くと後半も environment:<name> に変わる。
-  # 導出では追いつかないので、その場合は principal を明示する。
+  # 導出値は repo:<owner>/<repo>:ref:refs/heads/main。これが正しいのは
+  # 「2026-07-15 より前に作られ、かつ immutable subject claim へ opt-in して
+  # いないリポジトリ」の「environment を使わない job」だけになった。
+  #
+  # GitHub は 2026-07-15 以降に作られたリポジトリの sub を数値 id を含む形に
+  # しており、リネームや移管でも同じ形へ切り替わる。旧形式は名前空間の
+  # 再利用に弱く、消して同じ名前で作り直せば同じ sub が再現するため、
+  # OIDC の仕様が求める「二度と再割り当てされない」を満たさない。
+  #
+  # つまり導出に頼れる場面は今後減る一方なので、principal は明示するのが
+  # 望ましい。実測は
+  #   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
   principalOf = a:
     if a.principal != null then a.principal
     else "repo:${a.repo}:ref:refs/heads/main";
@@ -135,9 +143,10 @@ in
               description = ''
                 opkssh に渡す identity。GitHub OIDC の sub と完全一致させる。
 
-                null なら repo:<owner>/<repo>:ref:refs/heads/main を使う。
-                リポジトリが sub claim をカスタマイズしている場合や、job に
-                environment: が付く場合は形が変わるので、実測した値をここに書く。
+                null なら repo:<owner>/<repo>:ref:refs/heads/main を導出する。
+                これが正しいのは 2026-07-15 より前に作られ immutable subject
+                claim へ opt-in していないリポジトリの、environment を使わない
+                job だけ。それ以外は形が変わるので実測した値をここに書く。
                 実測方法:
                   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
               '';
