@@ -184,3 +184,50 @@ func TestHAProxyPlaceholderDisappearsOnceAppsExist(t *testing.T) {
 		t.Fatalf("待機用 listener が残っている:\n%s", got)
 	}
 }
+
+// ワークロードの多くはアプリ本体と同じバイナリを別の入口で動かすもので、
+// 保持期間やバッチ幅といった設定を本体と共有する。渡さないと既定値で動き、
+// しかも黙って動くので気付けない。
+func TestWorkloadUnitCarriesTheAppEnvironment(t *testing.T) {
+	a := App{
+		Name:   "fighter",
+		DBName: "fighter",
+		Manifest: &manifest.Manifest{App: manifest.App{
+			Env: map[string]string{
+				"SHARE_RETENTION_DAYS": "30",
+				"PGUSER":               "fighter_app",
+			},
+		}},
+	}
+	out := WorkloadUnit(a, "cleanup", WorkloadSpec{
+		Image: "localhost/fighter:current", DBUser: "fighter_app",
+	})
+	for _, want := range []string{
+		"Environment=PGUSER=fighter_app",
+		"Environment=SHARE_RETENTION_DAYS=30",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("%q が無い:\n%s", want, out)
+		}
+	}
+}
+
+// 秘密はここに現れてはいけない。unit ファイルは平文で置かれる。
+func TestWorkloadUnitKeepsSecretsInTheEnvFile(t *testing.T) {
+	a := App{
+		Name:   "fighter",
+		DBName: "fighter",
+		Manifest: &manifest.Manifest{App: manifest.App{
+			Secrets: map[string]string{"TOKEN": "fighter-token"},
+		}},
+	}
+	out := WorkloadUnit(a, "cleanup", WorkloadSpec{
+		Image: "x", DBUser: "fighter_app", EnvFile: "/run/yunirun/fighter/runtime.env",
+	})
+	if strings.Contains(out, "TOKEN") {
+		t.Fatalf("秘密の名前が unit に出ている:\n%s", out)
+	}
+	if !strings.Contains(out, "EnvironmentFile=/run/yunirun/fighter/runtime.env") {
+		t.Fatalf("EnvironmentFile が無い:\n%s", out)
+	}
+}

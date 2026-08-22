@@ -179,6 +179,16 @@ func WorkloadUnit(a App, name string, w WorkloadSpec) string {
 	p("")
 	p("[Container]")
 	p("Image=%s", w.Image)
+	// アプリ本体と同じ設定を渡す。ワークロードの多くは同じバイナリを別の
+	// 入口で動かすもので、保持期間やバッチ幅といった設定を本体と共有する。
+	// 渡さないと既定値で動いてしまい、しかも黙って動くので気付けない。
+	//
+	// ここに乗るのは秘密でない値だけ。秘密は EnvironmentFile 経由で、
+	// ワークロードごとに読めるものが違う (migration だけが owner
+	// パスワードを読める) という分離はそのまま保たれる。
+	for _, k := range sortedKeys(a.Manifest.App.Env) {
+		p("Environment=%s=%s", k, a.Manifest.App.Env[k])
+	}
 	if a.DBName != "" {
 		p("Volume=/run/postgresql:/run/postgresql")
 		p("Environment=PGHOST=/run/postgresql")
