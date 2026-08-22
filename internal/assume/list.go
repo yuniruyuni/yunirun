@@ -104,7 +104,16 @@ var assumptions = []Assumption{
 			"改名した後も HAProxy は旧名の frontend を配り続けていた。" +
 			"ポートは台帳が引き継いでいたので配送自体は成り立ってしまい、" +
 			"新しく足したアプリの frontend が listen されないという形で" +
-			"初めて露見した。書いたら読み直させる。",
+			"初めて露見した。収束のたびに無条件で読み直させる。設定が変わった" +
+			"ときだけにすると、既にずれている状態から抜け出せない。",
+	},
+	{
+		ID:   "systemd/a-unit-cannot-wait-for-a-job-ordered-after-itself",
+		What: "After= で自分の後に並ぶ unit へ job を出して完了を待つと固まる",
+		Why: "HAProxy の unit は After=yunirun-converge.service なので、その job は " +
+			"converge が終わるまで走れない。converge の中から systemctl で " +
+			"reload を要求して完了を待つと、自分が終わらないと進まない job を " +
+			"待つことになる。--no-block で要求だけして返る。",
 	},
 	{
 		ID:   "fs/traversal-needs-x-on-every-component",
