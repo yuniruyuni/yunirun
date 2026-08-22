@@ -41,6 +41,14 @@ pkgs.testers.runNixOSTest {
     services.openssh.enable = true;
     services.opkssh.enable = true;
 
+    # HAProxy のログをコンソールへ流さない。
+    #
+    # nixos テストのドライバはコマンドの出力をコンソール越しに読む。converge が
+    # HAProxy を読み直すと、その瞬間に backend has no server available が
+    # 出力へ割り込み、ドライバが結果を base64 として復号できずに落ちる
+    # (Incorrect padding)。journal には残るので調査には困らない。
+    services.journald.extraConfig = "ForwardToConsole=no";
+
     services.yunirun = {
       enable = true;
       domain = "example.test";
@@ -96,6 +104,15 @@ pkgs.testers.runNixOSTest {
 
     with subtest("HAProxy が起動する"):
         machine.wait_for_unit("yunirun-haproxy.service")
+
+    with subtest("HAProxy は書いた設定を実際に配っている"):
+        # 設定を書くだけで読み直させないと、ディスク上の内容と動いている
+        # 内容が食い違ったまま気付けない。宣言したアプリの frontend が
+        # 実際に listen されていることで確かめる。
+        for app in ["alpha", "beta"]:
+            machine.succeed(f"grep -q 'frontend {app}_in' /etc/yunirun/haproxy.cfg")
+        machine.wait_until_succeeds("ss -tln | grep -q 127.0.0.1:8100")
+        machine.wait_until_succeeds("ss -tln | grep -q 127.0.0.1:8110")
 
     with subtest("収束は冪等"):
         before = machine.succeed("cat /var/lib/yunirun/allocations.json")

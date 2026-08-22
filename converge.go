@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -89,10 +90,17 @@ func runConverge(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(filepath.Dir(*haproxyOut), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(*haproxyOut, []byte(render.HAProxy(apps)), 0o644); err != nil {
+	changed, err := writeIfChanged(*haproxyOut, []byte(render.HAProxy(apps)))
+	if err != nil {
 		return err
 	}
-	fmt.Printf("==> HAProxy 設定を書き出しました: %s\n", *haproxyOut)
+	if changed {
+		fmt.Printf("==> HAProxy 設定を書き出しました: %s\n", *haproxyOut)
+		if err := reloadHAProxy(ctx, r); err != nil {
+			return err
+		}
+		fmt.Printf("==> HAProxy を読み直しました\n")
+	}
 
 	if len(failed) > 0 {
 		return fmt.Errorf("%d 個のアプリを収束できませんでした: %w", len(failed), errors.Join(failed...))
@@ -232,6 +240,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	}
 
 	units := map[string]string{}
+	var timers []string
 	for _, color := range render.Colors {
 		units[fmt.Sprintf("%s-%s.container", name, color)] = render.ContainerUnit(ra, color)
 	}
@@ -244,13 +253,19 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		spec := workloadSpec(cfg, name, wname, w, names, migrationEnv, runtimeEnv, repoOwner(cfg, name))
 		units[fmt.Sprintf("%s-%s.container", name, wname)] = render.WorkloadUnit(ra, wname, spec)
 		if w.Schedule != "" {
-			units[fmt.Sprintf("%s-%s.timer", name, wname)] = render.TimerUnit(ra, wname, spec)
+			tname := fmt.Sprintf("%s-%s.timer", name, wname)
+			units[tname] = render.TimerUnit(ra, wname, spec)
+			timers = append(timers, tname)
 		}
 	}
 	if err := system.WriteUnits(home, a.UID, a.GID, units); err != nil {
 		return render.App{}, err
 	}
 	if err := system.ReloadUserUnits(ctx, r, user, a.UID); err != nil {
+		return render.App{}, err
+	}
+	// ファイルを置いて daemon-reload しただけでは timer は動かない。
+	if err := system.EnableUserTimers(ctx, r, a.UID, timers); err != nil {
 		return render.App{}, err
 	}
 	return ra, nil
@@ -418,4 +433,34 @@ func trimLine(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// writeIfChanged は内容が変わるときだけ書く。
+//
+// 変わっていないのに書くと、後段の reload が毎回走る。HAProxy の reload は
+// 無停止だが、そのたびに worker が入れ替わって進行中の接続が旧 worker に
+// 取り残されるので、意味の無い入れ替えは避ける。
+func writeIfChanged(path string, want []byte) (bool, error) {
+	if got, err := os.ReadFile(path); err == nil && bytes.Equal(got, want) {
+		return false, nil
+	}
+	return true, os.WriteFile(path, want, 0o644)
+}
+
+// reloadHAProxy は書き出した設定を HAProxy に読み直させる。
+//
+// これが無いと、設定は正しく書かれているのに反映されない。実際、アプリの
+// 改名から数時間、HAProxy は旧名の frontend を配り続けていた。ポートは
+// 台帳が引き継いでいたので配送自体は成り立ってしまい、新しく足した
+// アプリの frontend が listen されないという形で初めて露見した。
+//
+// try-reload-or-restart を使う。まだ動いていないとき (起動直後で converge が
+// 先に走った場合) に reload を送ると失敗するが、この形なら何もしない。
+// 起動そのものは wantedBy が受け持つ。
+func reloadHAProxy(ctx context.Context, r system.Runner) error {
+	if _, err := r.Run(ctx, nil, "systemctl", "try-reload-or-restart",
+		"yunirun-haproxy.service"); err != nil {
+		return fmt.Errorf("HAProxy を読み直せません: %w", err)
+	}
+	return nil
 }

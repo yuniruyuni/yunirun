@@ -84,6 +84,29 @@ var assumptions = []Assumption{
 		// 実際の DB が要るので e2e に任せる。migrate が毎回検査する。
 	},
 	{
+		ID:   "quadlet/ignores-unit-types-it-does-not-know",
+		What: "Quadlet のディレクトリに .timer を置いても systemd からは見えない",
+		Why: "Quadlet が処理するのは .container / .volume / .network / .pod など" +
+			"自分が知る種類だけで、それ以外は無視する。エラーにもならないので、" +
+			"置いたつもりで何も起きない。systemd の unit は " +
+			"~/.config/systemd/user へ置く必要がある。",
+	},
+	{
+		ID:   "systemd/a-unit-file-is-not-an-enabled-unit",
+		What: "unit ファイルを置いて daemon-reload しても timer は動かない",
+		Why: "timers.target.wants への symlink が要り、それを作るのが enable。" +
+			"ファイルがあるだけでは systemd は起動予定に入れない。",
+	},
+	{
+		ID:   "haproxy/config-on-disk-is-not-config-in-effect",
+		What: "設定ファイルを書き換えても、読み直させるまで反映されない",
+		Why: "converge が設定を書くだけで reload していなかったため、アプリを" +
+			"改名した後も HAProxy は旧名の frontend を配り続けていた。" +
+			"ポートは台帳が引き継いでいたので配送自体は成り立ってしまい、" +
+			"新しく足したアプリの frontend が listen されないという形で" +
+			"初めて露見した。書いたら読み直させる。",
+	},
+	{
 		ID:   "fs/traversal-needs-x-on-every-component",
 		What: "パスの途中に x が無ければ、末端の権限に関係なく届かない",
 		Why: "stateDir を 0700 root にしたため配下のホームへ辿れなかった。" +

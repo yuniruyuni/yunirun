@@ -35,6 +35,14 @@ pkgs.testers.runNixOSTest {
       '';
     };
 
+    # HAProxy のログをコンソールへ流さない。
+    #
+    # nixos テストのドライバはコマンドの出力をコンソール越しに読む。converge が
+    # HAProxy を読み直すと、その瞬間に backend has no server available が
+    # 出力へ割り込み、ドライバが結果を base64 として復号できずに落ちる
+    # (Incorrect padding)。journal には残るので調査には困らない。
+    services.journald.extraConfig = "ForwardToConsole=no";
+
     services.yunirun = {
       enable = true;
       domain = "example.test";
