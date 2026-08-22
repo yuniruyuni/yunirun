@@ -100,6 +100,11 @@ type Workload struct {
 	// Role は接続する DB ロール。owner は DDL、app は DML のみ。
 	// migration だけが owner を要求する。
 	Role string `json:"role"`
+	// Env はこのワークロードだけの環境変数。app.env に同じ名前があれば
+	// こちらが勝つ。同じバイナリでも入口が違えば適切な値が違うため
+	// (fighter の cleanup は接続プールを 1 に絞り、文が長いので
+	// statement timeout を伸ばす)。
+	Env map[string]string `json:"env"`
 }
 
 // 名前に使える文字を絞る。ここを緩めると unit 名やファイルパスに任意の文字列が

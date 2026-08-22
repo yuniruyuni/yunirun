@@ -63,7 +63,12 @@ DB パスワードは yunirun が生成する。この値はマシンの外に�
 
   "workloads": {
     "migration": { "image": "fighter-migration" },
-    "cleanup": { "schedule": "02:23", "args": ["--batch=cleanup"] }
+    "cleanup": {
+      "schedule": "02:23",
+      "args": ["--batch=cleanup"],
+      // app.env はワークロードにも渡る。違う値が要るものだけここに書く。
+      "env": { "PGPOOL_MAX": "1", "CLEANUP_BATCH_SIZE": "500" }
+    }
   }
 }
 ```
