@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,9 +33,13 @@ func TestWriteIfChangedReportsWhetherItWrote(t *testing.T) {
 	}
 }
 
-// reload は start ではなく try-reload-or-restart を使う。converge が
-// HAProxy より先に走った場合、reload は失敗するがこの形なら何もしない。
-func TestReloadHAProxyUsesTryReloadOrRestart(t *testing.T) {
+// HAProxy の unit は After=yunirun-converge.service なので、その job は
+// converge が終わるまで走れない。完了を待つと自分が終わらないと進まない
+// job を待つことになり、起動時に固まる。--no-block が要る。
+//
+// try-reload-or-restart なのは、converge が先に走って HAProxy がまだ
+// 動いていない場合に reload だと失敗するため。この形なら何もしない。
+func TestReloadHAProxyDoesNotWaitForItsOwnJob(t *testing.T) {
 	r := &recordingRunner{}
 	if err := reloadHAProxy(t.Context(), r); err != nil {
 		t.Fatal(err)
@@ -42,9 +47,9 @@ func TestReloadHAProxyUsesTryReloadOrRestart(t *testing.T) {
 	if len(r.calls) != 1 {
 		t.Fatalf("呼び出しが 1 件ではない: %v", r.calls)
 	}
-	c := r.calls[0]
-	if c[0] != "systemctl" || c[1] != "try-reload-or-restart" ||
-		c[2] != "yunirun-haproxy.service" {
-		t.Fatalf("想定と違う呼び出し: %v", c)
+	got := strings.Join(r.calls[0], " ")
+	want := "systemctl --no-block try-reload-or-restart yunirun-haproxy.service"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

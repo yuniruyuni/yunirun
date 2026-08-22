@@ -108,6 +108,14 @@ var assumptions = []Assumption{
 			"ときだけにすると、既にずれている状態から抜け出せない。",
 	},
 	{
+		ID:   "systemd/a-unit-cannot-wait-for-a-job-ordered-after-itself",
+		What: "After= で自分の後に並ぶ unit へ job を出して完了を待つと固まる",
+		Why: "HAProxy の unit は After=yunirun-converge.service なので、その job は " +
+			"converge が終わるまで走れない。converge の中から systemctl で " +
+			"reload を要求して完了を待つと、自分が終わらないと進まない job を " +
+			"待つことになる。--no-block で要求だけして返る。",
+	},
+	{
 		ID:   "fs/traversal-needs-x-on-every-component",
 		What: "パスの途中に x が無ければ、末端の権限に関係なく届かない",
 		Why: "stateDir を 0700 root にしたため配下のホームへ辿れなかった。" +

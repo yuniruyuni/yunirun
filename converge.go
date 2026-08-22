@@ -468,10 +468,18 @@ func writeIfChanged(path string, want []byte) (bool, error) {
 // try-reload-or-restart を使う。まだ動いていないとき (起動直後で converge が
 // 先に走った場合) に reload を送ると失敗するが、この形なら何もしない。
 // 起動そのものは wantedBy が受け持つ。
+//
+// --no-block が要る。HAProxy の unit は After=yunirun-converge.service なので、
+// その job は converge が終わるまで走れない。完了を待つと、converge は
+// 自分が終わらないと進まない job を待つことになり、起動時に固まる
+// (実際 VM テストが数十分返らなくなった)。
+//
+// 待たない代わりに、reload の成否はここでは分からない。設定の妥当性は
+// ExecReload の 1 段目が検査し、失敗すれば HAProxy の unit 側に残る。
 func reloadHAProxy(ctx context.Context, r system.Runner) error {
-	if _, err := r.Run(ctx, nil, "systemctl", "try-reload-or-restart",
+	if _, err := r.Run(ctx, nil, "systemctl", "--no-block", "try-reload-or-restart",
 		"yunirun-haproxy.service"); err != nil {
-		return fmt.Errorf("HAProxy を読み直せません: %w", err)
+		return fmt.Errorf("HAProxy の読み直しを要求できません: %w", err)
 	}
 	return nil
 }
