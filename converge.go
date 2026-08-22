@@ -96,10 +96,19 @@ func runConverge(ctx context.Context, args []string) error {
 	}
 	if changed {
 		fmt.Printf("==> HAProxy 設定を書き出しました: %s\n", *haproxyOut)
-		if err := reloadHAProxy(ctx, r); err != nil {
-			return err
-		}
-		fmt.Printf("==> HAProxy を読み直しました\n")
+	}
+	// 内容が変わっていなくても毎回読み直させる。
+	//
+	// 変わったときだけにしていたところ、ディスク上の設定と動いている設定が
+	// 既にずれている状態から抜け出せなかった。実際、reload を入れる前に
+	// 書かれた設定に fighter の frontend が含まれていたにもかかわらず、
+	// 次の収束では「変わっていない」と判定されて反映されなかった。
+	//
+	// 読み直しても、動いている設定と同じなら実質何も起きない。-Ws の
+	// master-worker では worker が入れ替わるだけで、既存の接続は旧 worker が
+	// 処理し終えてから終わる。ずれ続けるより毎回揃える方がよい。
+	if err := reloadHAProxy(ctx, r); err != nil {
+		return err
 	}
 
 	if len(failed) > 0 {
@@ -437,9 +446,8 @@ func trimLine(s string) string {
 
 // writeIfChanged は内容が変わるときだけ書く。
 //
-// 変わっていないのに書くと、後段の reload が毎回走る。HAProxy の reload は
-// 無停止だが、そのたびに worker が入れ替わって進行中の接続が旧 worker に
-// 取り残されるので、意味の無い入れ替えは避ける。
+// 書き換えを避けるのは mtime を動かさないため。変わっていないのに触ると、
+// 変更を追う側 (人の目も含めて) が無用な差分を見ることになる。
 func writeIfChanged(path string, want []byte) (bool, error) {
 	if got, err := os.ReadFile(path); err == nil && bytes.Equal(got, want) {
 		return false, nil
@@ -453,6 +461,9 @@ func writeIfChanged(path string, want []byte) (bool, error) {
 // 改名から数時間、HAProxy は旧名の frontend を配り続けていた。ポートは
 // 台帳が引き継いでいたので配送自体は成り立ってしまい、新しく足した
 // アプリの frontend が listen されないという形で初めて露見した。
+//
+// 収束のたびに無条件で呼ぶ。設定が変わったときだけにすると、既にずれて
+// いる状態から抜け出せない。
 //
 // try-reload-or-restart を使う。まだ動いていないとき (起動直後で converge が
 // 先に走った場合) に reload を送ると失敗するが、この形なら何もしない。

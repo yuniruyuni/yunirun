@@ -6,9 +6,8 @@ import (
 	"testing"
 )
 
-// 設定を書いただけでは HAProxy は読み直さない。書いた内容と動いている
-// 内容が食い違ったまま気付けなくなる。実際、アプリの改名から数時間
-// HAProxy は旧名の frontend を配り続けていた。
+// 書き換えを避けるのは mtime を動かさないため。反映そのものは内容の変化に
+// かかわらず毎回行う (ずれた状態から抜け出せなくなるため)。
 func TestWriteIfChangedReportsWhetherItWrote(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "haproxy.cfg")
 
