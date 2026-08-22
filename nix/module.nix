@@ -15,29 +15,6 @@ let
   cfg = config.services.yunirun;
   pkg = self.packages.${pkgs.stdenv.hostPlatform.system}.yunirun;
 
-  # apps の値は「リポジトリ名だけの文字列」と「attrset」の両方を許す。
-  # 大半のアプリは前者で足りるので、ここで後者へ揃えてから使う。
-  appDefs = lib.mapAttrs
-    (_: v: if lib.isString v then { repo = v; principal = null; } else v)
-    cfg.apps;
-
-  # opkssh に渡す identity。GitHub OIDC の sub と完全一致する必要がある。
-  #
-  # 導出値は repo:<owner>/<repo>:ref:refs/heads/main。これが正しいのは
-  # 「2026-07-15 より前に作られ、かつ immutable subject claim へ opt-in して
-  # いないリポジトリ」の「environment を使わない job」だけになった。
-  #
-  # GitHub は 2026-07-15 以降に作られたリポジトリの sub を数値 id を含む形に
-  # しており、リネームや移管でも同じ形へ切り替わる。旧形式は名前空間の
-  # 再利用に弱く、消して同じ名前で作り直せば同じ sub が再現するため、
-  # OIDC の仕様が求める「二度と再割り当てされない」を満たさない。
-  #
-  # つまり導出に頼れる場面は今後減る一方なので、principal は明示するのが
-  # 望ましい。実測は
-  #   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
-  principalOf = a:
-    if a.principal != null then a.principal
-    else "repo:${a.repo}:ref:refs/heads/main";
 
   configFile = pkgs.writeText "yunirun-config.json" (builtins.toJSON {
     inherit (cfg) domain adminRecipient hostKeyPath basePort baseUID;
@@ -45,7 +22,7 @@ let
     homesDir = cfg.homesDir;
     # yunirun 本体が要るのは名前とリポジトリの対応だけ。認可は NixOS 側の
     # 仕事なので、principal は渡さない。
-    apps = lib.mapAttrs (_: a: a.repo) appDefs;
+    apps = lib.mapAttrs (_: a: a.repo) cfg.apps;
   });
 
   # yunirun が実行時に呼ぶ外部コマンド。PATH をここで決めることで、
@@ -130,42 +107,41 @@ in
     };
 
     apps = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.either lib.types.str
-        (lib.types.submodule {
-          options = {
-            repo = lib.mkOption {
-              type = lib.types.str;
-              description = "リポジトリ (owner/name)。";
-            };
-            principal = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = ''
-                opkssh に渡す identity。GitHub OIDC の sub と完全一致させる。
-
-                null なら repo:<owner>/<repo>:ref:refs/heads/main を導出する。
-                これが正しいのは 2026-07-15 より前に作られ immutable subject
-                claim へ opt-in していないリポジトリの、environment を使わない
-                job だけ。それ以外は形が変わるので実測した値をここに書く。
-                実測方法:
-                  gh api repos/<owner>/<repo>/actions/oidc/customization/sub
-              '';
-            };
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          repo = lib.mkOption {
+            type = lib.types.str;
+            description = "リポジトリ (owner/name)。image の取得元になる。";
           };
-        }));
+          principal = lib.mkOption {
+            type = lib.types.str;
+            description = ''
+              opkssh に渡す identity。GitHub OIDC の sub と完全一致させる。
+
+              省略できない。かつては repo から
+              repo:<owner>/<repo>:ref:refs/heads/main を導出していたが、
+              その形が正しいのは「2026-07-15 より前に作られ、immutable
+              subject claim へ opt-in しておらず、environment も使わない」
+              場合だけになった。導出が当たるかどうかがリポジトリの生い立ちで
+              決まる状態は、間違えたときに Permission denied としか出ない。
+
+              実測してそのまま書く:
+                gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+              が返す sub_claim_prefix に、job の性質に応じて
+              :ref:refs/heads/main か :environment:<name> を足したもの。
+            '';
+          };
+        };
+      });
       default = { };
       example = {
-        post = "yuniruyuni/StreamerPost";
         fighter = {
           repo = "yuniruyuni/FighterNotes";
           principal = "repo:yuniruyuni@85034901/FighterNotes@1313852776:ref:refs/heads/main";
         };
       };
       description = ''
-        取り込むアプリ。名前からリポジトリへの対応。
-
-        値は文字列 (リポジトリ名だけ) か attrset。attrset にすると opkssh の
-        認可先 principal を明示できる。
+        取り込むアプリ。名前からリポジトリと認可先への対応。
 
         ここに書くのは取り込みの意思決定だけで、アプリの中身に関する設定は
         各リポジトリの yunirun.jsonc にある。この一覧がそのまま opkssh の
@@ -240,14 +216,14 @@ in
           options = [ "NOPASSWD" ];
         }
       ];
-    }) appDefs;
+    }) cfg.apps;
 
     # 取り込み一覧がそのまま認可になる。
     services.opkssh.authorizations = lib.mapAttrsToList (name: a: {
       user = "yunirun-${name}";
-      principal = principalOf a;
+      principal = a.principal;
       issuer = "https://token.actions.githubusercontent.com";
-    }) appDefs;
+    }) cfg.apps;
 
     # HAProxy は yunirun が生成した設定を読む。アプリの増減に追従させるため、
     # NixOS の services.haproxy (設定が eval 時に固定される) は使わない。

@@ -46,7 +46,10 @@ pkgs.testers.runNixOSTest {
     services.yunirun = {
       enable = true;
       domain = "example.test";
-      apps.beta = "example/beta";
+      apps.beta = {
+        repo = "example/beta";
+        principal = "repo:example/beta:ref:refs/heads/main";
+      };
     };
 
     virtualisation = {

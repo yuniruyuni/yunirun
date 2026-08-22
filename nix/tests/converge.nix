@@ -53,10 +53,13 @@ pkgs.testers.runNixOSTest {
       enable = true;
       domain = "example.test";
       apps = {
-        # 省略形。認可先は repo から導かれる。
-        alpha = "example/alpha";
-        # attrset 形。sub claim をカスタマイズしているリポジトリ向けに
-        # 認可先を明示できることを確かめる。
+        # 認可先は必ず明示する。導出は無い。
+        alpha = {
+          repo = "example/alpha";
+          principal = "repo:example/alpha:ref:refs/heads/main";
+        };
+        # job に environment が付くと後半が変わり、sub claim を
+        # カスタマイズしていると前半も変わる。どちらもそのまま書ける。
         beta = {
           repo = "example/beta";
           principal = "repo:example@42/beta@7:environment:production";
@@ -78,15 +81,16 @@ pkgs.testers.runNixOSTest {
         machine.succeed("id yunirun-alpha")
         machine.succeed("id yunirun-beta")
 
-    with subtest("認可先は省略形なら repo から導かれる"):
+    with subtest("宣言した認可先がそのまま auth_id に落ちる"):
         auth = machine.succeed("cat /etc/opk/auth_id")
         assert "yunirun-alpha repo:example/alpha:ref:refs/heads/main" in auth, auth
-
-    with subtest("認可先は attrset で明示できる"):
-        # sub claim をカスタマイズしているリポジトリは導出では追いつかない。
-        # 導出値が混ざっていないことまで見る。
-        auth = machine.succeed("cat /etc/opk/auth_id")
         assert "yunirun-beta repo:example@42/beta@7:environment:production" in auth, auth
+
+    with subtest("repo から認可先を作らない"):
+        # かつては repo から repo:<owner>/<repo>:ref:refs/heads/main を
+        # 導出していた。beta の repo は example/beta なので、導出が残って
+        # いればこの文字列が現れる。認可を勝手に広げないことを見る。
+        auth = machine.succeed("cat /etc/opk/auth_id")
         assert "repo:example/beta:ref" not in auth, auth
 
     with subtest("DB は宣言が無ければ作られない"):
