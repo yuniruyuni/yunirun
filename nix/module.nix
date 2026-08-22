@@ -15,11 +15,29 @@ let
   cfg = config.services.yunirun;
   pkg = self.packages.${pkgs.stdenv.hostPlatform.system}.yunirun;
 
+  # apps の値は「リポジトリ名だけの文字列」と「attrset」の両方を許す。
+  # 大半のアプリは前者で足りるので、ここで後者へ揃えてから使う。
+  appDefs = lib.mapAttrs
+    (_: v: if lib.isString v then { repo = v; principal = null; } else v)
+    cfg.apps;
+
+  # opkssh に渡す identity。GitHub OIDC の sub と完全一致する必要がある。
+  #
+  # 既定は素の repo:<owner>/<repo>:ref:refs/heads/main。ただしリポジトリが
+  # sub claim をカスタマイズしていると前半が変わり (数値 id を含む形など)、
+  # job に environment: が付くと後半も environment:<name> に変わる。
+  # 導出では追いつかないので、その場合は principal を明示する。
+  principalOf = a:
+    if a.principal != null then a.principal
+    else "repo:${a.repo}:ref:refs/heads/main";
+
   configFile = pkgs.writeText "yunirun-config.json" (builtins.toJSON {
     inherit (cfg) domain adminRecipient hostKeyPath basePort baseUID;
     stateDir = cfg.stateDir;
     homesDir = cfg.homesDir;
-    apps = cfg.apps;
+    # yunirun 本体が要るのは名前とリポジトリの対応だけ。認可は NixOS 側の
+    # 仕事なので、principal は渡さない。
+    apps = lib.mapAttrs (_: a: a.repo) appDefs;
   });
 
   # yunirun が実行時に呼ぶ外部コマンド。PATH をここで決めることで、
@@ -104,11 +122,41 @@ in
     };
 
     apps = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
+      type = lib.types.attrsOf (lib.types.either lib.types.str
+        (lib.types.submodule {
+          options = {
+            repo = lib.mkOption {
+              type = lib.types.str;
+              description = "リポジトリ (owner/name)。";
+            };
+            principal = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                opkssh に渡す identity。GitHub OIDC の sub と完全一致させる。
+
+                null なら repo:<owner>/<repo>:ref:refs/heads/main を使う。
+                リポジトリが sub claim をカスタマイズしている場合や、job に
+                environment: が付く場合は形が変わるので、実測した値をここに書く。
+                実測方法:
+                  gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+              '';
+            };
+          };
+        }));
       default = { };
-      example = { fighter = "yuniruyuni/fighter-notes"; };
+      example = {
+        post = "yuniruyuni/StreamerPost";
+        fighter = {
+          repo = "yuniruyuni/FighterNotes";
+          principal = "repo:yuniruyuni@85034901/FighterNotes@1313852776:ref:refs/heads/main";
+        };
+      };
       description = ''
-        取り込むアプリ。名前からリポジトリ (owner/name) への対応。
+        取り込むアプリ。名前からリポジトリへの対応。
+
+        値は文字列 (リポジトリ名だけ) か attrset。attrset にすると opkssh の
+        認可先 principal を明示できる。
 
         ここに書くのは取り込みの意思決定だけで、アプリの中身に関する設定は
         各リポジトリの yunirun.jsonc にある。この一覧がそのまま opkssh の
@@ -183,14 +231,14 @@ in
           options = [ "NOPASSWD" ];
         }
       ];
-    }) cfg.apps;
+    }) appDefs;
 
     # 取り込み一覧がそのまま認可になる。
-    services.opkssh.authorizations = lib.mapAttrsToList (name: repo: {
+    services.opkssh.authorizations = lib.mapAttrsToList (name: a: {
       user = "yunirun-${name}";
-      principal = "repo:${repo}:ref:refs/heads/main";
+      principal = principalOf a;
       issuer = "https://token.actions.githubusercontent.com";
-    }) cfg.apps;
+    }) appDefs;
 
     # HAProxy は yunirun が生成した設定を読む。アプリの増減に追従させるため、
     # NixOS の services.haproxy (設定が eval 時に固定される) は使わない。
