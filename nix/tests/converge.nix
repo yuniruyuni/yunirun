@@ -35,10 +35,25 @@ pkgs.testers.runNixOSTest {
       '';
     };
 
+    # 認可リストが実際に auth_id へ落ちることを見たいので opkssh を有効にする。
+    # yunirun 側は services.opkssh.authorizations を書くだけなので、これが
+    # 無いと生成物を確かめられない。
+    services.openssh.enable = true;
+    services.opkssh.enable = true;
+
     services.yunirun = {
       enable = true;
       domain = "example.test";
-      apps.alpha = "example/alpha";
+      apps = {
+        # 省略形。認可先は repo から導かれる。
+        alpha = "example/alpha";
+        # attrset 形。sub claim をカスタマイズしているリポジトリ向けに
+        # 認可先を明示できることを確かめる。
+        beta = {
+          repo = "example/beta";
+          principal = "repo:example@42/beta@7:environment:production";
+        };
+      };
     };
 
     virtualisation = {
@@ -53,6 +68,18 @@ pkgs.testers.runNixOSTest {
 
     with subtest("ユーザが作られる"):
         machine.succeed("id yunirun-alpha")
+        machine.succeed("id yunirun-beta")
+
+    with subtest("認可先は省略形なら repo から導かれる"):
+        auth = machine.succeed("cat /etc/opk/auth_id")
+        assert "yunirun-alpha repo:example/alpha:ref:refs/heads/main" in auth, auth
+
+    with subtest("認可先は attrset で明示できる"):
+        # sub claim をカスタマイズしているリポジトリは導出では追いつかない。
+        # 導出値が混ざっていないことまで見る。
+        auth = machine.succeed("cat /etc/opk/auth_id")
+        assert "yunirun-beta repo:example@42/beta@7:environment:production" in auth, auth
+        assert "repo:example/beta:ref" not in auth, auth
 
     with subtest("DB は宣言が無ければ作られない"):
         # マニフェストをまだ受け取っていないので database の宣言も無い。
@@ -65,6 +92,7 @@ pkgs.testers.runNixOSTest {
     with subtest("unit が置かれる"):
         machine.succeed("test -f /var/lib/yunirun-apps/alpha/.config/containers/systemd/alpha-blue.container")
         machine.succeed("test -f /var/lib/yunirun-apps/alpha/.config/containers/systemd/alpha-green.container")
+        machine.succeed("test -f /var/lib/yunirun-apps/beta/.config/containers/systemd/beta-blue.container")
 
     with subtest("HAProxy が起動する"):
         machine.wait_for_unit("yunirun-haproxy.service")
