@@ -23,19 +23,35 @@ cloudflared → 公開ホスト名
 
 **3 層に分かれている。** 情報を持つべき場所に持たせるのが設計の中心。
 
-### 1. システム側 (`/etc/yunirun/config.json`)
+### 1. システム側 (NixOS の宣言)
 
-取り込みの意思決定だけ。NixOS モジュールが書き出す。
+取り込みの意思決定だけ。**アプリ側が自分を勝手に取り込ませることはできない。**
+
+```nix
+services.yunirun.apps.fighter = {
+  repo = "yuniruyuni/FighterNotes";
+  # opkssh に渡す identity。GitHub OIDC の sub と完全一致させる。
+  #   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+  principal = "repo:yuniruyuni@85034901/FighterNotes@1313852776:ref:refs/heads/main";
+};
+```
+
+`principal` は省略できない。かつては repo から導出していたが、その形が
+正しいのは「2026-07-15 より前に作られ、immutable subject claim へ opt-in
+しておらず、environment も使わない」場合だけになった。導出が当たるかどうかが
+リポジトリの生い立ちで決まる状態は、間違えたときに `Permission denied` としか
+出ないため、書かせる方を選んでいる。
+
+モジュールはここから 2 つのものを作る。**認可 (`/etc/opk/auth_id`)** と、
+yunirun 本体が読む **`/etc/yunirun/config.json`**。後者に principal は
+入らない。認可は NixOS 側の仕事で、yunirun が知る必要がない。
 
 ```json
 {
   "domain": "yuniruyuni.net",
-  "apps": { "fighter": "yuniruyuni/fighter-notes" }
+  "apps": { "fighter": "yuniruyuni/FighterNotes" }
 }
 ```
-
-これがそのまま opkssh の認可リストと対応する。**アプリ側が自分を勝手に
-取り込ませることはできない。**
 
 ### 2. yunirun が導出するもの
 
