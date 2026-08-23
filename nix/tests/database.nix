@@ -64,6 +64,12 @@ let
     config.Entrypoint = [ "${entrypoint}" ];
   };
 
+  # マニフェストは Nix 側でファイルにする。テストスクリプト内でヒアドキュメントを
+  # 書くと、Python の三重引用符が Nix の文字列終端 '' と衝突する。
+  manifest = pkgs.writeText "yunirun.jsonc" (builtins.toJSON {
+    app.database = true;
+    workloads.migration = { };
+  });
 in
 pkgs.testers.runNixOSTest {
   name = "yunirun-database";
