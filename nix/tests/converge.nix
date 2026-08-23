@@ -77,6 +77,16 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    # converge は端末を握ったまま子プロセスを起こす。それが後から書き込むと
+    # ドライバがコマンド出力を base64 として復号できずに落ちる
+    # (Incorrect padding)。中身とは無関係に落ちるので、標準入出力を端末から
+    # 切り離して呼ぶ。失敗したときの診断はファイルに残す。
+    def converge(m, cmd="yunirun converge"):
+        m.succeed(
+            cmd + " </dev/null >/tmp/converge.log 2>&1"
+            " || { cat /tmp/converge.log; exit 1; }"
+        )
+
     machine.wait_for_unit("postgresql.service")
     machine.wait_for_unit("yunirun-converge.service")
 
@@ -132,7 +142,7 @@ pkgs.testers.runNixOSTest {
     with subtest("収束は冪等"):
         # 比較もゲストの中で行う。中身をドライバへ運ぶ必要が無い。
         machine.succeed("cp /var/lib/yunirun/allocations.json /tmp/before.json")
-        machine.succeed("systemctl restart yunirun-converge.service")
+        converge(machine, "systemctl restart yunirun-converge.service")
         machine.succeed(
             "cmp -s /tmp/before.json /var/lib/yunirun/allocations.json"
             " || { echo '再実行で割り当てが変わった'; diff /tmp/before.json"
@@ -158,7 +168,7 @@ pkgs.testers.runNixOSTest {
             "sed -i 's|\"alpha\":|\"aaa\": \"example/aaa\", \"alpha\":|'"
             " /etc/yunirun/config.json"
         )
-        machine.succeed("yunirun converge")
+        converge(machine)
 
         # 既存の割り当てが 1 バイトも動いていないこと。
         machine.succeed(
@@ -172,5 +182,35 @@ pkgs.testers.runNixOSTest {
             f"test \"$(jq '.entries.aaa.UID' {led})\""
             f" != \"$(jq '.entries.alpha.UID' {led})\""
         )
+
+    with subtest("宣言から消すと止まる"):
+        # 経路は宣言から生成しているので勝手に消えるが、コンテナは
+        # Restart=always の user unit なので誰も止めない。外からは 404 なのに
+        # 中では動いてポートを掴んだままになる。経路と揃えて止める。
+        machine.succeed("loginctl show-user yunirun-aaa -p Linger | grep -q yes")
+        machine.succeed(
+            "sed -i 's|\"aaa\": \"example/aaa\", ||' /etc/yunirun/config.json"
+        )
+        converge(machine)
+        machine.succeed("! loginctl show-user yunirun-aaa -p Linger | grep -q yes")
+        machine.succeed("! grep -q 'frontend aaa_in' /etc/yunirun/haproxy.cfg")
+
+    with subtest("止めるだけで消さない"):
+        # 宣言の書き間違いでデータが飛ぶのは割に合わない。片付けは
+        # yunirun remove が明示的に行う。
+        machine.succeed("id yunirun-aaa")
+        machine.succeed("test -d /var/lib/yunirun-apps/aaa")
+        machine.succeed(f"jq -e '.entries.aaa' {led}")
+
+    with subtest("remove は宣言に残っているものを拒む"):
+        # 消しても次の収束が作り直すので意味が無く、その間だけ落ちる。
+        machine.fail("yunirun remove alpha")
+
+    with subtest("remove は実体を片付けるが DB は残す"):
+        machine.succeed("yunirun remove aaa")
+        machine.fail("id yunirun-aaa")
+        machine.succeed("test ! -d /var/lib/yunirun-apps/aaa")
+        machine.succeed("! grep -q yunirun-aaa /etc/subuid")
+        machine.succeed(f"! jq -e '.entries.aaa' {led}")
   '';
 }

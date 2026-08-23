@@ -187,3 +187,15 @@ func EnableUserTimers(ctx context.Context, r Runner, uid int, timers []string) e
 	}
 	return nil
 }
+
+// StopUser はユーザの systemd インスタンスを止める。配下のコンテナごと止まる。
+//
+// linger も外す。残しておくと再起動で勝手に立ち上がり、止めたつもりのものが
+// 動き続ける。
+//
+// 失敗は無視する。ユーザが既に無い場合や、そもそも起動していない場合に
+// エラーになるが、どちらも「止まっている」という目的は達している。
+func StopUser(ctx context.Context, r Runner, user string, uid int) {
+	_, _ = r.Run(ctx, nil, "loginctl", "disable-linger", user)
+	_, _ = r.Run(ctx, nil, "systemctl", "stop", fmt.Sprintf("user@%d.service", uid))
+}

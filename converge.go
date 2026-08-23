@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/yuniruyuni/yunirun/internal/alloc"
@@ -86,6 +87,19 @@ func runConverge(ctx context.Context, args []string) error {
 		apps = append(apps, app)
 		fmt.Printf("==> %s (uid=%d frontend=%d)\n", name, a.UID, a.Frontend)
 	}
+
+	// 宣言から消えたアプリを止める。
+	//
+	// 経路 (HAProxy) は宣言から生成しているので勝手に消えるが、コンテナは
+	// user unit として Restart=always で動き続ける。外からは 404 なのに中では
+	// 動いてポートを掴んだままになり、しかも再起動を跨ぐと /run 上の env が
+	// 作り直されずに起動失敗へ変わる。気付きにくい壊れ方なので、経路と
+	// 揃えて稼働も止める。
+	//
+	// 消すのは稼働だけ。ユーザ・ホーム・DB・金庫・台帳は残す。戻したく
+	// なったときに台帳が残っていれば uid もポートも元通りになる。片付けは
+	// yunirun remove が明示的に行う。
+	stopUndeclared(ctx, r, cfg, ledger)
 
 	if err := os.MkdirAll(filepath.Dir(*haproxyOut), 0o755); err != nil {
 		return err
@@ -482,4 +496,35 @@ func reloadHAProxy(ctx context.Context, r system.Runner) error {
 		return fmt.Errorf("HAProxy の読み直しを要求できません: %w", err)
 	}
 	return nil
+}
+
+// stopUndeclared は台帳にあるが宣言に無いアプリを止める。
+//
+// 判定に台帳を使うのは、これが「yunirun が作ったもの」の一覧だから。
+// ホームや Linux ユーザを走査すると、yunirun 以外が作ったものまで拾う。
+func stopUndeclared(ctx context.Context, r system.Runner, cfg *config.Config, l *alloc.Ledger) {
+	declared := make(map[string]bool, len(cfg.Apps))
+	for _, n := range cfg.Names() {
+		declared[n] = true
+	}
+	names := make([]string, 0, len(l.Entries))
+	for n := range l.Entries {
+		if !declared[n] {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		a := l.Entries[name]
+		user := alloc.User(name)
+		system.StopUser(ctx, r, user, a.UID)
+		// 実行時に公開していたものは消す。秘密が tmpfs 上に残り続ける
+		// 理由が無い。
+		_ = os.RemoveAll(filepath.Join(runtimeDir, name))
+		fmt.Printf("==> %s を止めました (宣言に無い)\n", name)
+		fmt.Printf("    ユーザ %s、ホーム %s、台帳の割り当ては残しています。\n",
+			user, filepath.Join(cfg.HomeDir(), name))
+		fmt.Printf("    片付けるなら yunirun remove %s\n", name)
+	}
 }

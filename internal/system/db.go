@@ -144,3 +144,38 @@ func parseGrantCounts(out string) (total, granted int, err error) {
 	}
 	return 0, 0, fmt.Errorf("権限の確認結果を読み取れません: %q", out)
 }
+
+// DropDatabase は DB とロールを落とす。
+//
+// 順序が要る。ロールは所有物があると落とせないので、DB を先に落とし、
+// 残った権限を DROP OWNED で外してからロールを消す。
+//
+// これを呼ぶのは yunirun remove --drop-database だけ。収束の経路からは
+// 決して呼ばない。宣言を書き間違えただけでデータが消えるのは割に合わない。
+func DropDatabase(ctx context.Context, r Runner, n DBNames) error {
+	// 接続が残っていると DROP DATABASE が拒否される。先に切る。
+	sql := fmt.Sprintf(`
+DO $$ BEGIN
+  PERFORM pg_terminate_backend(pid) FROM pg_stat_activity
+   WHERE datname = '%s' AND pid <> pg_backend_pid();
+END $$;
+DROP DATABASE IF EXISTS "%s";
+`, n.Database, n.Database)
+	if _, err := runPsql(ctx, r, "postgres", sql); err != nil {
+		return fmt.Errorf("%s を落とせません: %w", n.Database, err)
+	}
+	for _, role := range []string{n.App, n.Owner} {
+		drop := fmt.Sprintf(`
+DO $$ BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN
+    EXECUTE format('DROP OWNED BY %%I', '%s');
+    EXECUTE format('DROP ROLE %%I', '%s');
+  END IF;
+END $$;
+`, role, role, role)
+		if _, err := runPsql(ctx, r, "postgres", drop); err != nil {
+			return fmt.Errorf("ロール %s を落とせません: %w", role, err)
+		}
+	}
+	return nil
+}

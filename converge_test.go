@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yuniruyuni/yunirun/internal/alloc"
+	"github.com/yuniruyuni/yunirun/internal/config"
 )
 
 // 書き換えを避けるのは mtime を動かさないため。反映そのものは内容の変化に
@@ -51,5 +54,48 @@ func TestReloadHAProxyDoesNotWaitForItsOwnJob(t *testing.T) {
 	want := "systemctl --no-block try-reload-or-restart yunirun-haproxy.service"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// 宣言から消えたアプリは止める。経路 (HAProxy) は宣言から生成しているので
+// 勝手に消えるのに、コンテナは Restart=always で動き続けていた。外からは
+// 404 なのに中では動いてポートを掴んだまま、という状態になる。
+func TestStopUndeclaredStopsOnlyWhatIsNotDeclared(t *testing.T) {
+	r := &recordingRunner{}
+	cfg := &config.Config{Apps: map[string]string{"alpha": "example/alpha"}}
+	l := &alloc.Ledger{Entries: map[string]alloc.Alloc{
+		"alpha": {UID: 6000},
+		"gone":  {UID: 6001},
+	}}
+	stopUndeclared(t.Context(), r, cfg, l)
+
+	var stopped []string
+	for _, c := range r.calls {
+		if c[0] == "systemctl" && c[1] == "stop" {
+			stopped = append(stopped, c[2])
+		}
+	}
+	if len(stopped) != 1 || stopped[0] != "user@6001.service" {
+		t.Fatalf("止めた対象が想定と違う: %v (全呼び出し %v)", stopped, r.calls)
+	}
+}
+
+// 止めるだけで、消してはいけない。宣言の書き間違いでデータが飛ぶのは
+// 割に合わない。片付けは yunirun remove の仕事。
+func TestStopUndeclaredNeverTouchesData(t *testing.T) {
+	r := &recordingRunner{}
+	cfg := &config.Config{Apps: map[string]string{}}
+	l := &alloc.Ledger{Entries: map[string]alloc.Alloc{"gone": {UID: 6001}}}
+	stopUndeclared(t.Context(), r, cfg, l)
+
+	for _, c := range r.calls {
+		switch c[0] {
+		case "userdel", "psql", "runuser", "dropdb":
+			t.Fatalf("データを消す操作を発行している: %v", c)
+		}
+	}
+	// 台帳も残す。戻したときに uid とポートが元通りになる。
+	if _, ok := l.Entries["gone"]; !ok {
+		t.Fatal("台帳から消している")
 	}
 }
