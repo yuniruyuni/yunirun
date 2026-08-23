@@ -329,3 +329,20 @@ func TestExecIsOneLineForTheWholeCommand(t *testing.T) {
 		t.Fatal("引数が繋がっていない")
 	}
 }
+
+// 公式 image は /var/lib/postgresql が postgres 所有である前提で書かれて
+// いる。root 所有のディレクトリを bind mount すると、権限を落とした後の
+// mkdir が Permission denied で落ちる。
+func TestDBUnitLetsPodmanFixTheMountOwnership(t *testing.T) {
+	got := DBUnit(App{Name: "fighter", Manifest: &manifest.Manifest{}}, DBSpec{
+		Image: "x", DataDir: "/d", SockDir: "/s", EnvFile: "/e",
+	})
+	if !strings.Contains(got, "User=postgres") {
+		t.Fatalf("実行ユーザを指定していない:\n%s", got)
+	}
+	for _, want := range []string{"Volume=/d:/var/lib/postgresql:U", "Volume=/s:/var/run/postgresql:U"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%q が無い。所有者が合わず起動できない:\n%s", want, got)
+		}
+	}
+}
