@@ -19,11 +19,20 @@ let
   #
   # 公式 image の PGDATA の置き場所までは再現しないので、そこが変わった場合は
   # このテストでは捕まらない。
+  # 公式 image と同じ入口だけを持たせる。root で起動して postgres へ権限を
+  # 落とすところまで含める。initdb は root では動かないため、ここを省くと
+  # ソケットが現れないまま「起動している」ように見える。
   entrypoint = pkgs.writeShellScript "pg-entrypoint" ''
     set -eu
-    export PATH=${pkgs.postgresql}/bin:${pkgs.coreutils}/bin:$PATH
+    export PATH=${pkgs.postgresql}/bin:${pkgs.coreutils}/bin:${pkgs.util-linux}/bin:$PATH
     export PGDATA=/var/lib/postgresql/data
-    mkdir -p "$PGDATA" /var/run/postgresql
+
+    if [ "$(id -u)" = 0 ]; then
+      mkdir -p "$PGDATA" /var/run/postgresql
+      chown -R 999:999 /var/lib/postgresql /var/run/postgresql
+      exec setpriv --reuid 999 --regid 999 --clear-groups "$0" "$@"
+    fi
+
     chmod 700 "$PGDATA"
     if [ ! -s "$PGDATA/PG_VERSION" ]; then
       printf '%s' "$POSTGRES_PASSWORD" > /tmp/pw
@@ -41,19 +50,20 @@ let
     tag = "latest";
     copyToRoot = pkgs.buildEnv {
       name = "pg-root";
-      paths = [ pkgs.postgresql pkgs.coreutils pkgs.bash ];
+      paths = [ pkgs.postgresql pkgs.coreutils pkgs.bash pkgs.util-linux ];
       pathsToLink = [ "/bin" ];
     };
-    runAsRoot = "mkdir -p /var/lib/postgresql /var/run/postgresql";
+    runAsRoot = ''
+      #!${pkgs.runtimeShell}
+      mkdir -p /var/lib/postgresql /var/run/postgresql /etc /tmp
+      chmod 1777 /tmp
+      printf 'root:x:0:0::/root:/bin/sh\npostgres:x:999:999::/var/lib/postgresql:/bin/sh\n' > /etc/passwd
+      printf 'root:x:0:\npostgres:x:999:\n' > /etc/group
+      chown -R 999:999 /var/lib/postgresql /var/run/postgresql
+    '';
     config.Entrypoint = [ "${entrypoint}" ];
   };
 
-  # マニフェストは Nix 側でファイルにする。テストスクリプト内でヒアドキュメントを
-  # 書くと、Python の三重引用符が Nix の文字列終端 '' と衝突する。
-  manifest = pkgs.writeText "yunirun.jsonc" (builtins.toJSON {
-    app.database = true;
-    workloads.migration = { };
-  });
 in
 pkgs.testers.runNixOSTest {
   name = "yunirun-database";
@@ -137,7 +147,12 @@ pkgs.testers.runNixOSTest {
     converge(machine)
 
     with subtest("アプリ専用の DB が立つ"):
-        machine.wait_for_unit("beta-db.service")
+        # 落ちたときに中身が分からないと調べようがないので、DB のログを出す。
+        try:
+            machine.wait_for_unit("beta-db.service")
+        except Exception:
+            machine.execute("journalctl -u beta-db.service --no-pager | tail -40 >&2")
+            raise
         # 判定はゲストの中で完結させる。出力を持ち帰って照合すると、
         # ドライバとの受け渡しが稀に壊れたときに、中身ではなく経路のせいで
         # 落ちる (実際 base64 のまま返って落ちたことがある)。
