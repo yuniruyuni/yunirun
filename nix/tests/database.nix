@@ -27,8 +27,12 @@ let
     export PATH=${pkgs.postgresql}/bin:${pkgs.coreutils}/bin:${pkgs.util-linux}/bin:$PATH
     export PGDATA=/var/lib/postgresql/data
 
+    # User=postgres で起動されると root の分岐に入らない。ここで作らないと
+    # 以降が「ディレクトリが無い」で落ちる。マウント元は :U で postgres 所有に
+    # なっているので、postgres のままでも作れる。
+    mkdir -p "$PGDATA" /var/run/postgresql
+
     if [ "$(id -u)" = 0 ]; then
-      mkdir -p "$PGDATA" /var/run/postgresql
       chown -R 999:999 /var/lib/postgresql /var/run/postgresql
       exec setpriv --reuid 999 --regid 999 --clear-groups "$0" "$@"
     fi
