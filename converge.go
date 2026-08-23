@@ -582,6 +582,7 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 		DataDir: dataDir,
 		SockDir: sockDir,
 		EnvFile: dbEnv,
+		Owner:   n.Owner,
 		// 資源を絞る。1 アプリ分のデータしか入らないので、共有インスタンス
 		// 向けの既定値は大きすぎる。
 		Args: []string{
