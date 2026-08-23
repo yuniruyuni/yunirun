@@ -178,6 +178,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # yunirun は podman と Quadlet の上に立っている。アプリのコンテナは
+    # rootless の user generator が、DB のコンテナは root 側の
+    # system generator が unit に変換する。
+    #
+    # ここで宣言しておかないと隠れた依存になる。実際、VM テストは podman を
+    # 有効にしていなかったために /etc/containers/systemd へ置いた定義が
+    # unit にならず、Unit not found で落ちた。ホスト側で個別の設定を
+    # したい場合に備えて mkDefault にしてある。
+    virtualisation.podman.enable = lib.mkDefault true;
+
     # yunirun を手で実行できるようにする。
     #
     # 実行時に呼ぶ外部コマンドも一緒に入れる。systemd 経由なら PATH を与えて
