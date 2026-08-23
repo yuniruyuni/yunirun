@@ -34,13 +34,21 @@ let
     fi
 
     chmod 700 "$PGDATA"
-    if [ ! -s "$PGDATA/PG_VERSION" ]; then
+    # 初期化が途中で落ちると PG_VERSION だけ出来て DB が無い状態になり、
+    # 次の起動が「初期化済み」と誤判定する。完了の印を別に置く。
+    if [ ! -f "$PGDATA/.initialized" ]; then
+      rm -rf "$PGDATA"/* "$PGDATA"/.[!.]* 2>/dev/null || true
       printf '%s' "$POSTGRES_PASSWORD" > /tmp/pw
       initdb -U "$POSTGRES_USER" --pwfile=/tmp/pw --auth-local=md5 --auth-host=md5
       rm -f /tmp/pw
       pg_ctl -D "$PGDATA" -o "-c listen_addresses= -c unix_socket_directories=/var/run/postgresql" -w start
-      createdb -h /var/run/postgresql -U "$POSTGRES_USER" -O "$POSTGRES_USER" "$POSTGRES_DB"
+      # auth-local を md5 にしてあるので、ローカル接続にもパスワードが要る。
+      # 渡さないと createdb が失敗し、しかも PG_VERSION は既に出来ているので
+      # 次の起動が「初期化済み」と判定して DB だけ無い状態になる。
+      PGPASSWORD="$POSTGRES_PASSWORD" createdb -h /var/run/postgresql \
+        -U "$POSTGRES_USER" -O "$POSTGRES_USER" "$POSTGRES_DB"
       pg_ctl -D "$PGDATA" -w stop
+      touch "$PGDATA/.initialized"
     fi
     exec postgres -c listen_addresses= -c unix_socket_directories=/var/run/postgresql "$@"
   '';
