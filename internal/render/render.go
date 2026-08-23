@@ -208,8 +208,11 @@ func WorkloadUnit(a App, name string, w WorkloadSpec) string {
 	if w.EnvFile != "" {
 		p("EnvironmentFile=%s", w.EnvFile)
 	}
-	for _, arg := range w.Args {
-		p("Exec=%s", arg)
+	// Exec はコマンドライン全体を 1 行で書く。引数ごとに 1 行にすると、
+	// 最後の行だけが効いて残りが落ちる。引数が 1 つのうちは偶然動くので
+	// 気付きにくい。
+	if len(w.Args) > 0 {
+		p("Exec=%s", strings.Join(w.Args, " "))
 	}
 	p("")
 	p("[Service]")
@@ -286,8 +289,9 @@ func DBUnit(a App, w DBSpec) string {
 	// 読めない場所に置く。
 	p("EnvironmentFile=%s", w.EnvFile)
 	// 初期化のたびに同じ設定で立ち上がるよう、引数は unit に持たせる。
-	for _, arg := range w.Args {
-		p("Exec=%s", arg)
+	// Exec はコマンドライン全体を 1 行で書く。
+	if len(w.Args) > 0 {
+		p("Exec=%s", strings.Join(w.Args, " "))
 	}
 	// 収束は「応答するまで待つ」で判定するので、ここは systemd 側の目安。
 	p("HealthCmd=pg_isready -q")

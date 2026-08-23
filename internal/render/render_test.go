@@ -301,3 +301,31 @@ func TestWorkloadEnvOverridesTheAppEnv(t *testing.T) {
 		}
 	}
 }
+
+// Quadlet の Exec はコマンドライン全体を 1 行で書く。引数ごとに 1 行に
+// すると最後の行だけが効き、残りが落ちる。引数が 1 つのうちは偶然動くので
+// 気付きにくい。実際 postgres が
+//
+//	invalid argument: "autovacuum_max_workers=1"
+//
+// で起動できなかった。
+func TestExecIsOneLineForTheWholeCommand(t *testing.T) {
+	a := App{Name: "fighter", Manifest: &manifest.Manifest{}}
+	for _, got := range []string{
+		WorkloadUnit(a, "cleanup", WorkloadSpec{
+			Image: "x", Args: []string{"--batch=cleanup", "--verbose"},
+		}),
+		DBUnit(a, DBSpec{
+			Image: "x", Args: []string{"-c", "shared_buffers=32MB", "-c", "max_connections=20"},
+		}),
+	} {
+		n := strings.Count(got, "\nExec=")
+		if n != 1 {
+			t.Fatalf("Exec が %d 行ある。1 行でなければ引数が落ちる:\n%s", n, got)
+		}
+	}
+	if !strings.Contains(DBUnit(a, DBSpec{Image: "x",
+		Args: []string{"-c", "shared_buffers=32MB"}}), "Exec=-c shared_buffers=32MB") {
+		t.Fatal("引数が繋がっていない")
+	}
+}
