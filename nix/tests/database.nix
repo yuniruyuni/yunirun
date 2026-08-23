@@ -138,9 +138,14 @@ pkgs.testers.runNixOSTest {
     # (Incorrect padding)。中身とは無関係に落ちるので、標準入出力を端末から
     # 切り離して呼ぶ。失敗したときの診断はファイルに残す。
     def converge(m, cmd="yunirun converge"):
+        # 落ちたときは DB のログも出す。DB が上がらないと収束は必ず失敗するが、
+        # 収束側のエラーだけでは理由が分からない。
         m.succeed(
             cmd + " </dev/null >/tmp/converge.log 2>&1"
-            " || { cat /tmp/converge.log; exit 1; }"
+            " || { cat /tmp/converge.log;"
+            " echo '--- beta-db ---';"
+            " journalctl -u beta-db.service --no-pager | tail -40;"
+            " exit 1; }"
         )
 
     machine.wait_for_unit("yunirun-converge.service")
