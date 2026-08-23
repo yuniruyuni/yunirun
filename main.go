@@ -32,6 +32,8 @@ func main() {
 		err = runDoctor(ctx, os.Args[2:])
 	case "rename":
 		err = runRename(ctx, os.Args[2:])
+	case "remove":
+		err = runRemove(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -76,6 +78,10 @@ func usage() {
       アプリの名前を変える。root で実行する。
       割り当て (uid, ポート, subuid) は引き継ぐので、Cloudflare の ingress を
       直す必要がない。ホームは捨てるため、改名の後は各アプリのデプロイが要る。
+
+  yunirun remove [--drop-database] [--dry-run] <名前>
+      アプリの実体を片付ける。root で実行する。先に宣言から外しておくこと。
+      DB とロールは既定で残す。--drop-database を付けたときだけ落とす。
 
 設定の所在:
   /etc/yunirun/config.json   どのリポジトリを取り込むか (システム側)

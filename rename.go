@@ -85,8 +85,7 @@ func runRename(ctx context.Context, args []string) error {
 
 	// 1. ユーザの systemd インスタンスを止める。配下のコンテナごと止まる。
 	//    linger が残っていると usermod がユーザを使用中と見て拒否する。
-	_, _ = r.Run(ctx, nil, "loginctl", "disable-linger", fromUser)
-	_, _ = r.Run(ctx, nil, "systemctl", "stop", fmt.Sprintf("user@%d.service", a.UID))
+	system.StopUser(ctx, r, fromUser, a.UID)
 
 	// 2. ホームを捨てる。converge が新しい名前で作り直す。
 	if err := os.RemoveAll(fromHome); err != nil {

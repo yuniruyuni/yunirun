@@ -172,5 +172,35 @@ pkgs.testers.runNixOSTest {
             f"test \"$(jq '.entries.aaa.UID' {led})\""
             f" != \"$(jq '.entries.alpha.UID' {led})\""
         )
+
+    with subtest("宣言から消すと止まる"):
+        # 経路は宣言から生成しているので勝手に消えるが、コンテナは
+        # Restart=always の user unit なので誰も止めない。外からは 404 なのに
+        # 中では動いてポートを掴んだままになる。経路と揃えて止める。
+        machine.succeed("loginctl show-user yunirun-aaa -p Linger | grep -q yes")
+        machine.succeed(
+            "sed -i 's|\"aaa\": \"example/aaa\", ||' /etc/yunirun/config.json"
+        )
+        machine.succeed("yunirun converge")
+        machine.succeed("! loginctl show-user yunirun-aaa -p Linger | grep -q yes")
+        machine.succeed("! grep -q 'frontend aaa_in' /etc/yunirun/haproxy.cfg")
+
+    with subtest("止めるだけで消さない"):
+        # 宣言の書き間違いでデータが飛ぶのは割に合わない。片付けは
+        # yunirun remove が明示的に行う。
+        machine.succeed("id yunirun-aaa")
+        machine.succeed("test -d /var/lib/yunirun-apps/aaa")
+        machine.succeed(f"jq -e '.entries.aaa' {led}")
+
+    with subtest("remove は宣言に残っているものを拒む"):
+        # 消しても次の収束が作り直すので意味が無く、その間だけ落ちる。
+        machine.fail("yunirun remove alpha")
+
+    with subtest("remove は実体を片付けるが DB は残す"):
+        machine.succeed("yunirun remove aaa")
+        machine.fail("id yunirun-aaa")
+        machine.succeed("test ! -d /var/lib/yunirun-apps/aaa")
+        machine.succeed("! grep -q yunirun-aaa /etc/subuid")
+        machine.succeed(f"! jq -e '.entries.aaa' {led}")
   '';
 }
