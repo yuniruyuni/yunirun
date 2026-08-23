@@ -6,6 +6,48 @@
 { pkgs, self, ... }:
 
 let
+  # DB の image をテスト用に組み立てる。
+  #
+  # 本番は docker.io/library/postgres を使うが、VM テストは外へ出られない。
+  # Docker Hub からダイジェスト固定で取ると、テストが外部の可用性に依存する
+  # うえ、更新のたびにハッシュを書き換えることになる。
+  #
+  # nixpkgs の postgresql に、公式 image と同じ入口 (POSTGRES_USER /
+  # POSTGRES_PASSWORD / POSTGRES_DB を読んで初期化する) だけを付けたものを
+  # 使う。これで確かめられるのは yunirun 側の振る舞い — unit の生成、
+  # 起動の順序、ロールの作成、権限の分離 — で、そこが目的。
+  #
+  # 公式 image の PGDATA の置き場所までは再現しないので、そこが変わった場合は
+  # このテストでは捕まらない。
+  entrypoint = pkgs.writeShellScript "pg-entrypoint" ''
+    set -eu
+    export PATH=${pkgs.postgresql}/bin:${pkgs.coreutils}/bin:$PATH
+    export PGDATA=/var/lib/postgresql/data
+    mkdir -p "$PGDATA" /var/run/postgresql
+    chmod 700 "$PGDATA"
+    if [ ! -s "$PGDATA/PG_VERSION" ]; then
+      printf '%s' "$POSTGRES_PASSWORD" > /tmp/pw
+      initdb -U "$POSTGRES_USER" --pwfile=/tmp/pw --auth-local=md5 --auth-host=md5
+      rm -f /tmp/pw
+      pg_ctl -D "$PGDATA" -o "-c listen_addresses= -c unix_socket_directories=/var/run/postgresql" -w start
+      createdb -h /var/run/postgresql -U "$POSTGRES_USER" -O "$POSTGRES_USER" "$POSTGRES_DB"
+      pg_ctl -D "$PGDATA" -w stop
+    fi
+    exec postgres -c listen_addresses= -c unix_socket_directories=/var/run/postgresql "$@"
+  '';
+
+  dbImage = pkgs.dockerTools.buildImage {
+    name = "localhost/postgres-test";
+    tag = "latest";
+    copyToRoot = pkgs.buildEnv {
+      name = "pg-root";
+      paths = [ pkgs.postgresql pkgs.coreutils pkgs.bash ];
+      pathsToLink = [ "/bin" ];
+    };
+    runAsRoot = "mkdir -p /var/lib/postgresql /var/run/postgresql";
+    config.Entrypoint = [ "${entrypoint}" ];
+  };
+
   # マニフェストは Nix 側でファイルにする。テストスクリプト内でヒアドキュメントを
   # 書くと、Python の三重引用符が Nix の文字列終端 '' と衝突する。
   manifest = pkgs.writeText "yunirun.jsonc" (builtins.toJSON {
@@ -26,13 +68,21 @@ pkgs.testers.runNixOSTest {
       fi
     '';
 
-    services.postgresql = {
-      enable = true;
-      authentication = ''
-        local all postgres peer
-        local all all      md5
-        host  all all      127.0.0.1/32 md5
-      '';
+    # ホストの PostgreSQL は要らない。DB はアプリごとにコンテナで立てる。
+    # psql は yunirun がロールを作るのに使うので、パッケージだけ入れる。
+    environment.systemPackages = [ pkgs.postgresql ];
+
+    # VM に外向きのネットワークが無いので、image を事前に読み込ませる。
+    services.yunirun.dbImage = "localhost/postgres-test:latest";
+    systemd.services.load-db-image = {
+      wantedBy = [ "yunirun-converge.service" ];
+      before = [ "yunirun-converge.service" ];
+      path = [ pkgs.podman ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.podman}/bin/podman load -i ${dbImage}";
+      };
     };
 
     # HAProxy のログをコンソールへ流さない。
@@ -69,8 +119,16 @@ pkgs.testers.runNixOSTest {
             " || { cat /tmp/converge.log; exit 1; }"
         )
 
-    machine.wait_for_unit("postgresql.service")
     machine.wait_for_unit("yunirun-converge.service")
+
+    # アプリ専用 PostgreSQL への接続。owner の資格情報は root しか読めない
+    # migration.env にある。ホストの psql からソケット越しに繋ぐ。
+    SOCK = "/var/lib/yunirun-db/beta/sock"
+    OWNER = (
+        "PGPASSWORD=$(grep -oP '(?<=DB_PASSWORD=).*'"
+        " /run/yunirun/beta/migration.env)"
+        f" psql -h {SOCK} -U beta"
+    )
 
     # DB を使うと宣言したマニフェストを置いてから収束させる。
     # 実際は deploy が運んでくるが、ここでは直接置く。
@@ -78,19 +136,37 @@ pkgs.testers.runNixOSTest {
     machine.succeed("cp ${manifest} /run/yunirun/beta/inbox/yunirun.jsonc")
     converge(machine)
 
-    with subtest("DB とロールが作られる"):
+    with subtest("アプリ専用の DB が立つ"):
+        machine.wait_for_unit("beta-db.service")
         # 判定はゲストの中で完結させる。出力を持ち帰って照合すると、
         # ドライバとの受け渡しが稀に壊れたときに、中身ではなく経路のせいで
         # 落ちる (実際 base64 のまま返って落ちたことがある)。
         machine.succeed(
-            "sudo -u postgres psql -tAc"
+            f"{OWNER} -d beta -tAc"
             " \"select 1 from pg_database where datname='beta'\" | grep -q 1"
         )
         for role in ["beta", "beta_app"]:
             machine.succeed(
-                "sudo -u postgres psql -tAc"
+                f"{OWNER} -d beta -tAc"
                 f" \"select 1 from pg_roles where rolname='{role}'\" | grep -q 1"
             )
+
+    with subtest("DB は到達経路を持たない"):
+        # ネットワークを与えると同じホスト上の他のコンテナから届きうる。
+        machine.succeed("grep -q 'Network=none' /etc/containers/systemd/beta-db.container")
+        machine.succeed("! grep -q PublishPort /etc/containers/systemd/beta-db.container")
+
+    with subtest("データはホームの外に置かれる"):
+        # ホームは rename や remove が捨てる。そこに置くと名前を変えただけで
+        # データが消える。
+        machine.succeed("test -d /var/lib/yunirun-db/beta/data")
+        machine.succeed("! test -e /var/lib/yunirun-apps/beta/pgdata")
+
+    with subtest("owner の資格情報はアプリのユーザから読めない"):
+        # DB コンテナは root 側の Quadlet として動かす。アプリのユーザで
+        # 動かすと、初期化に要る owner のパスワードをそのユーザが読める。
+        machine.fail("sudo -u yunirun-beta cat /run/yunirun/beta/db.env")
+        machine.succeed("test -f /etc/containers/systemd/beta-db.container")
 
     with subtest("owner パスワードはアプリのユーザから読めない"):
         # これが per-workload 分離の要。runtime が owner の資格情報を持てると、
@@ -106,7 +182,7 @@ pkgs.testers.runNixOSTest {
         conn = (
             "PGPASSWORD=$(grep -oP '(?<=DB_PASSWORD=).*'"
             " /run/yunirun/beta/runtime.env)"
-            " psql -h /run/postgresql -U beta_app -d beta -tAc"
+            f" psql -h {SOCK} -U beta_app -d beta -tAc"
         )
         # 接続はできる。
         machine.succeed(f"{conn} 'select 1'")
@@ -119,7 +195,7 @@ pkgs.testers.runNixOSTest {
         # SQL で空文字列リテラルを使わない書き方にしてある。testScript は Nix の
         # 複数行文字列なので、単引用符を 2 つ並べると文字列終端と解釈される。
         machine.succeed(
-            "! sudo -u postgres psql -d beta -tAc"
+            f"! {OWNER} -d beta -tAc"
             " \"select 1 from pg_default_acl\" | grep -q 1"
         )
 

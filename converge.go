@@ -203,6 +203,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 
 	// DB を使わないアプリには作らない。作ると消し忘れた資源が溜まるうえ、
 	// 不要な資格情報が生成される。
+	sockDir := ""
 	if m.App.Database {
 		vault := system.Vault{
 			Dir:            filepath.Join(cfg.StateDir, "secrets", name),
@@ -215,7 +216,14 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		if err != nil {
 			return render.App{}, err
 		}
-		if err := system.EnsureDatabase(ctx, r, names, owner, app); err != nil {
+
+		conn, err := ensureDatabaseContainer(ctx, r, cfg, name, a, names, owner)
+		if err != nil {
+			return render.App{}, err
+		}
+		sockDir = conn.SocketDir
+
+		if err := system.EnsureDatabase(ctx, r, conn, names, app); err != nil {
 			return render.App{}, err
 		}
 
@@ -257,6 +265,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	if m.App.Database {
 		ra.DBName = names.Database
 		ra.DBUser = names.App
+		ra.SockDir = sockDir
 	}
 	if len(runtimeEnvVars) > 0 {
 		ra.EnvFile = runtimeEnv
@@ -528,3 +537,75 @@ func stopUndeclared(ctx context.Context, r system.Runner, cfg *config.Config, l 
 		fmt.Printf("    片付けるなら yunirun remove %s\n", name)
 	}
 }
+
+// ensureDatabaseContainer はアプリ専用 PostgreSQL を立てて、繋がるまで待つ。
+//
+// root 側の Quadlet として置く。アプリのユーザで動かすと、初期化に要る
+// owner のパスワードをそのユーザが読めることになり、runtime が owner の
+// 資格情報を持てないという分離が崩れる。
+//
+// データはホームの外に置く。ホームは rename や remove が捨てるので、そこに
+// 置くと名前を変えただけでデータが消える。
+func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.Config,
+	name string, a alloc.Alloc, n system.DBNames, ownerPassword string) (system.Conn, error) {
+
+	base := filepath.Join(cfg.DatabaseDir(), name)
+	dataDir := filepath.Join(base, "data")
+	sockDir := filepath.Join(base, "sock")
+
+	// data は root だけが触れればよい。sock はアプリのコンテナが辿るので、
+	// 通り抜けだけ許す。中のソケット自体は PostgreSQL が 0777 で作る。
+	for dir, mode := range map[string]os.FileMode{
+		cfg.DatabaseDir(): 0o755, base: 0o755, dataDir: 0o700, sockDir: 0o755,
+	} {
+		if err := os.MkdirAll(dir, mode); err != nil {
+			return system.Conn{}, err
+		}
+		if err := os.Chmod(dir, mode); err != nil {
+			return system.Conn{}, err
+		}
+	}
+
+	// 初期化に使う値。root しか読めない場所に置く。
+	dbEnv := filepath.Join(runtimeDir, name, "db.env")
+	if err := writeEnvFile(dbEnv, map[string]string{
+		"POSTGRES_USER":     n.Owner,
+		"POSTGRES_PASSWORD": ownerPassword,
+		"POSTGRES_DB":       n.Database,
+	}, 0, 0); err != nil {
+		return system.Conn{}, err
+	}
+
+	unit := name + "-db.container"
+	spec := render.DBSpec{
+		Image:   cfg.DatabaseImage(),
+		DataDir: dataDir,
+		SockDir: sockDir,
+		EnvFile: dbEnv,
+		// 資源を絞る。1 アプリ分のデータしか入らないので、共有インスタンス
+		// 向けの既定値は大きすぎる。
+		Args: []string{
+			"-c", "shared_buffers=32MB",
+			"-c", "max_connections=20",
+			"-c", "autovacuum_max_workers=1",
+		},
+	}
+	ra := render.App{Name: name, User: alloc.User(name), Alloc: a}
+	if err := system.WriteSystemUnit(unit, render.DBUnit(ra, spec)); err != nil {
+		return system.Conn{}, err
+	}
+	if err := system.StartSystemUnit(ctx, r, unit); err != nil {
+		return system.Conn{}, err
+	}
+
+	conn := system.Conn{SocketDir: sockDir, Owner: n.Owner, Password: ownerPassword}
+	// 初回は initdb が走るぶん時間がかかる。待たずに続けると、収束のたびに
+	// 「たまたま間に合ったか」で結果が変わる。
+	if err := system.WaitReady(ctx, r, conn, dbReadyTries); err != nil {
+		return system.Conn{}, err
+	}
+	return conn, nil
+}
+
+// dbReadyTries は DB の応答を待つ回数。テストから縮められるよう変数にしてある。
+var dbReadyTries = 60

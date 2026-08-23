@@ -36,6 +36,15 @@ type Config struct {
 	// HomesDir はアプリのホームを置く場所。空なら既定値。
 	HomesDir string `json:"homesDir"`
 
+	// DBDir はアプリ専用 PostgreSQL のデータとソケットを置く場所。空なら既定値。
+	//
+	// ホームとは分ける。ホームは rename や remove が捨てるので、そこに
+	// データを置くと名前を変えただけで消える。
+	DBDir string `json:"dbDir"`
+
+	// DBImage はアプリ専用 PostgreSQL の image。空なら既定値。
+	DBImage string `json:"dbImage"`
+
 	// BasePort と BaseUID は割り当ての起点。既存の仕組みと並行して動かす間、
 	// 帯を重ねないために外から指定できるようにしてある。0 なら既定値。
 	BasePort int `json:"basePort"`
@@ -109,6 +118,22 @@ func (c *Config) Base() alloc.Base {
 //
 // stateDir の外に置く。stateDir は台帳と秘密のために root 専用にしておきたいが、
 // パスの途中が辿れないと配下のホームへも届かないため。
+// DatabaseDir は DB のデータとソケットを置く場所を返す。
+func (c *Config) DatabaseDir() string {
+	if c.DBDir != "" {
+		return c.DBDir
+	}
+	return "/var/lib/yunirun-db"
+}
+
+// DatabaseImage は DB に使う image を返す。
+func (c *Config) DatabaseImage() string {
+	if c.DBImage != "" {
+		return c.DBImage
+	}
+	return "docker.io/library/postgres:18-alpine"
+}
+
 func (c *Config) HomeDir() string {
 	if c.HomesDir != "" {
 		return c.HomesDir

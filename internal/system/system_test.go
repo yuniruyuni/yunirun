@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,12 @@ type fakeRunner struct {
 func (f *fakeRunner) Run(_ context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, call{stdin: string(stdin), name: name, args: args})
 	return f.out, nil
+}
+
+// RunEnv は env を記録に含めない。argv に秘密が載っていないことを見るのが
+// この擬似 Runner の役目で、環境変数で渡すのは正しい経路であるため。
+func (f *fakeRunner) RunEnv(ctx context.Context, stdin []byte, _ []string, name string, args ...string) ([]byte, error) {
+	return f.Run(ctx, stdin, name, args...)
 }
 
 func (f *fakeRunner) argvContains(s string) bool {
@@ -65,7 +72,7 @@ func TestNewPasswordDiffersEachTime(t *testing.T) {
 // per-table GRANT を撒くと pgschema に毎回 REVOKE され、次の収束で復活する
 // 振動になる。その間アプリは permission denied になる。
 func TestProvisionSQLOmitsPerTableGrants(t *testing.T) {
-	sql := ProvisionSQL(NamesFor("fighter"), "pw1", "pw2") + GrantSQL(NamesFor("fighter"))
+	sql := ProvisionSQL(NamesFor("fighter"), "pw2") + GrantSQL(NamesFor("fighter"))
 	for _, bad := range []string{"ON ALL TABLES", "ALTER DEFAULT PRIVILEGES", "ON ALL SEQUENCES"} {
 		if strings.Contains(sql, bad) {
 			t.Fatalf("%q を発行している:\n%s", bad, sql)
@@ -73,11 +80,21 @@ func TestProvisionSQLOmitsPerTableGrants(t *testing.T) {
 	}
 }
 
-func TestProvisionSQLMakesOwnerOwnTheDatabase(t *testing.T) {
-	sql := ProvisionSQL(NamesFor("fighter"), "pw1", "pw2")
-	// apply の権限は GRANT ではなく所有権から来る。
-	if !strings.Contains(sql, `ALTER DATABASE "fighter" OWNER TO "fighter";`) {
-		t.Fatalf("所有権を設定していない:\n%s", sql)
+// DB と owner ロールはコンテナの初期化が作る。ここで作り直すと、初期化と
+// 収束のどちらが正なのかが曖昧になる。
+func TestProvisionSQLLeavesTheDatabaseAndOwnerToTheContainer(t *testing.T) {
+	sql := ProvisionSQL(NamesFor("fighter"), "pw2")
+	for _, bad := range []string{"CREATE DATABASE", "ALTER DATABASE", `CREATE ROLE "fighter" `} {
+		if strings.Contains(sql, bad) {
+			t.Fatalf("%q を発行している:\n%s", bad, sql)
+		}
+	}
+	// app ロールは作る。所有権は与えない。
+	if !strings.Contains(sql, `CREATE ROLE "fighter_app" LOGIN`) {
+		t.Fatalf("app ロールを作っていない:\n%s", sql)
+	}
+	if !strings.Contains(sql, `NOSUPERUSER`) {
+		t.Fatalf("app ロールの権限を絞っていない:\n%s", sql)
 	}
 }
 
@@ -91,28 +108,42 @@ func TestGrantSQLGivesAppOnlyConnectAndUsage(t *testing.T) {
 func TestEnsureDatabaseNeverPutsPasswordInArgv(t *testing.T) {
 	r := &fakeRunner{}
 	const owner, app = "OWNERSECRET", "APPSECRET"
-	if err := EnsureDatabase(context.Background(), r, NamesFor("fighter"), owner, app); err != nil {
+	conn := Conn{SocketDir: "/var/lib/yunirun-db/fighter/sock", Owner: "fighter", Password: owner}
+	if err := EnsureDatabase(context.Background(), r, conn, NamesFor("fighter"), app); err != nil {
 		t.Fatal(err)
 	}
 	// argv は ps から見える。パスワードは stdin 経由でしか渡してはいけない。
 	if r.argvContains(owner) || r.argvContains(app) {
 		t.Fatalf("パスワードが argv に載っている: %+v", r.calls)
 	}
-	if !strings.Contains(r.calls[0].stdin, owner) {
-		t.Fatal("stdin から渡されていない")
+	// app のパスワードは SQL に載るので stdin から渡る。
+	if !strings.Contains(r.calls[0].stdin, app) {
+		t.Fatal("app のパスワードが stdin から渡されていない")
+	}
+	// owner のパスワードは接続に使うだけで SQL には現れない。環境変数で渡す。
+	if strings.Contains(r.calls[0].stdin, owner) {
+		t.Fatal("owner のパスワードが SQL に混ざっている")
 	}
 }
 
-// pg_hba が local に md5 を要求する構成では root は peer 認証を使えない。
-// postgres だけが peer で入れる。
-func TestEnsureDatabaseRunsPsqlAsPostgres(t *testing.T) {
+// 繋ぐのはこのアプリ専用 PostgreSQL のソケットだけ。共有インスタンスへ
+// 向けると、他アプリの DB が同じ経路の先に居ることになる。
+func TestEnsureDatabaseConnectsToTheAppsOwnSocket(t *testing.T) {
 	r := &fakeRunner{}
-	if err := EnsureDatabase(context.Background(), r, NamesFor("fighter"), "a", "b"); err != nil {
+	conn := Conn{SocketDir: "/var/lib/yunirun-db/fighter/sock", Owner: "fighter", Password: "pw"}
+	if err := EnsureDatabase(context.Background(), r, conn, NamesFor("fighter"), "app"); err != nil {
 		t.Fatal(err)
 	}
 	c := r.calls[0]
-	if c.name != "runuser" || c.args[1] != "postgres" {
-		t.Fatalf("postgres として実行していない: %s %v", c.name, c.args)
+	if c.name != "psql" {
+		t.Fatalf("psql を直接呼んでいない: %s %v", c.name, c.args)
+	}
+	if !slices.Contains(c.args, conn.SocketDir) {
+		t.Fatalf("自分のソケットを指していない: %v", c.args)
+	}
+	// 共有インスタンスの経路が残っていないこと。
+	if slices.Contains(c.args, "/run/postgresql") {
+		t.Fatalf("共有のソケットを指している: %v", c.args)
 	}
 }
 

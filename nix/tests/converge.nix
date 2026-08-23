@@ -25,15 +25,9 @@ pkgs.testers.runNixOSTest {
       fi
     '';
 
-    services.postgresql = {
-      enable = true;
-      # コンテナから Unix ソケット経由で繋ぐために必要な設定。本番と揃える。
-      authentication = ''
-        local all postgres peer
-        local all all      md5
-        host  all all      127.0.0.1/32 md5
-      '';
-    };
+    # ホストの PostgreSQL は要らない。DB はアプリごとにコンテナで立てる。
+    # このテストのアプリはどれも DB を宣言していないので、DB 側は
+    # database.nix が受け持つ。
 
     # 認可リストが実際に auth_id へ落ちることを見たいので opkssh を有効にする。
     # yunirun 側は services.opkssh.authorizations を書くだけなので、これが
@@ -87,7 +81,6 @@ pkgs.testers.runNixOSTest {
             " || { cat /tmp/converge.log; exit 1; }"
         )
 
-    machine.wait_for_unit("postgresql.service")
     machine.wait_for_unit("yunirun-converge.service")
 
     with subtest("ユーザが作られる"):

@@ -16,6 +16,12 @@ func (r *recordingRunner) Run(_ context.Context, _ []byte, name string, args ...
 	return nil, nil
 }
 
+// RunEnv は env を無視して Run に流す。argv に何が載ったかだけを見たいので、
+// 環境変数の中身はここでは記録しない。
+func (r *recordingRunner) RunEnv(ctx context.Context, stdin []byte, _ []string, name string, args ...string) ([]byte, error) {
+	return r.Run(ctx, stdin, name, args...)
+}
+
 func TestImageRefDefaultsToAppName(t *testing.T) {
 	if got := imageRef("yuniruyuni", "costume", ""); got != "ghcr.io/yuniruyuni/costume" {
 		t.Fatalf("got %q", got)

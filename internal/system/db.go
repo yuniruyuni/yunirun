@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DBNames は 1 アプリに対応する DB とロールの名前。
@@ -37,26 +38,24 @@ func (n DBNames) SecretName(role string) string {
 // 宣言されていない権限として毎回 REVOKE し、次の収束で復活する振動になり、
 // その間アプリが permission denied になる。table 単位の権限はアプリ側の
 // schema ファイルで宣言する。
-func ProvisionSQL(n DBNames, ownerPassword, appPassword string) string {
+func ProvisionSQL(n DBNames, appPassword string) string {
 	var b strings.Builder
 	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
 
-	// CREATE ROLE / DATABASE に IF NOT EXISTS が無いので DO block で冪等化する。
+	// DB と owner ロールはコンテナの初期化が作る (POSTGRES_DB / POSTGRES_USER)。
+	// ここで作るのは app ロールだけ。
+	//
+	// CREATE ROLE に IF NOT EXISTS が無いので DO block で冪等化する。
 	p(`DO $$ BEGIN`)
-	p(`  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN CREATE ROLE "%s" LOGIN; END IF;`, n.Owner, n.Owner)
 	p(`  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN CREATE ROLE "%s" LOGIN; END IF;`, n.App, n.App)
 	p(`END $$;`)
 
-	p(`ALTER ROLE "%s" WITH PASSWORD '%s';`, n.Owner, ownerPassword)
+	// 毎回流す。金庫が正で DB がそれに追従する。金庫を作り直した場合でも
+	// 食い違いが残らない。
 	p(`ALTER ROLE "%s" WITH PASSWORD '%s';`, n.App, appPassword)
 
-	p(`SELECT 'CREATE DATABASE "%s" OWNER "%s"'`, n.Database, n.Owner)
-	p(`  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '%s') \gexec`, n.Database)
-
-	// 所有権が apply の権限の源になる。所有者は自分が作ったオブジェクトを
-	// 所有するので明示的な GRANT は要らず、pgschema が権限を宣言的に管理しても
-	// 自分自身を締め出すことがない。
-	p(`ALTER DATABASE "%s" OWNER TO "%s";`, n.Database, n.Owner)
+	// app には所有権を与えない。DDL は owner だけが行う。
+	p(`ALTER ROLE "%s" NOSUPERUSER NOCREATEDB NOCREATEROLE;`, n.App)
 	return b.String()
 }
 
@@ -67,26 +66,60 @@ func GrantSQL(n DBNames) string {
 		n.Database, n.App, n.App)
 }
 
-// EnsureDatabase は DB とロールを収束させる。
+// Conn はアプリ専用の PostgreSQL への接続先。
 //
-// psql は postgres ユーザとして実行する。pg_hba が local に md5 を要求する
-// 構成 (コンテナから Unix ソケット経由で繋ぐために必要) では、root は peer
-// 認証を使えずパスワードを求められるため。postgres だけが peer で入れる。
-func EnsureDatabase(ctx context.Context, r Runner, n DBNames, ownerPassword, appPassword string) error {
+// アプリごとに 1 インスタンス立てるので、共有インスタンスのような「postgres
+// ユーザで peer 認証」は使わない。ソケットのディレクトリと owner の資格情報で
+// 繋ぐ。owner はそのインスタンスの中では superuser で、他のアプリの DB は
+// そもそも別プロセス・別データディレクトリなので触れない。
+type Conn struct {
+	SocketDir string
+	Owner     string
+	Password  string
+}
+
+// EnsureDatabase は DB の中のロールと権限を収束させる。
+//
+// DB そのものと owner ロールはコンテナの初期化が作る (POSTGRES_DB と
+// POSTGRES_USER)。ここで作るのは app ロールと、その最小限の権限だけ。
+func EnsureDatabase(ctx context.Context, r Runner, c Conn, n DBNames, appPassword string) error {
 	// SQL は stdin で渡す。argv に載せるとパスワードが ps から見える。
-	if _, err := runPsql(ctx, r, "postgres", ProvisionSQL(n, ownerPassword, appPassword)); err != nil {
-		return fmt.Errorf("%s の DB 作成に失敗しました: %w", n.Database, err)
+	if _, err := runPsql(ctx, r, c, n.Database, ProvisionSQL(n, appPassword)); err != nil {
+		return fmt.Errorf("%s のロール作成に失敗しました: %w", n.Database, err)
 	}
-	if _, err := runPsql(ctx, r, n.Database, GrantSQL(n)); err != nil {
+	if _, err := runPsql(ctx, r, c, n.Database, GrantSQL(n)); err != nil {
 		return fmt.Errorf("%s の権限付与に失敗しました: %w", n.Database, err)
 	}
 	return nil
 }
 
-func runPsql(ctx context.Context, r Runner, db, sql string) ([]byte, error) {
-	return r.Run(ctx, []byte(sql),
-		"runuser", "-u", "postgres", "--",
-		"psql", "-v", "ON_ERROR_STOP=1", "-d", db)
+func runPsql(ctx context.Context, r Runner, c Conn, db, sql string) ([]byte, error) {
+	// パスワードは環境変数で渡す。argv に載せると ps から見える。
+	// SQL も stdin で渡す。こちらにもパスワードが混ざることがある。
+	return r.RunEnv(ctx, []byte(sql), []string{"PGPASSWORD=" + c.Password},
+		"psql", "-v", "ON_ERROR_STOP=1",
+		"-h", c.SocketDir, "-U", c.Owner, "-d", db)
+}
+
+// WaitReady は DB が接続を受け付けるまで待つ。
+//
+// コンテナの起動は非同期で、初回は initdb が走るぶん時間がかかる。待たずに
+// 続けると、収束のたびに「たまたま間に合ったか」で結果が変わる。
+func WaitReady(ctx context.Context, r Runner, c Conn, tries int) error {
+	var last error
+	for i := 0; i < tries; i++ {
+		if _, err := runPsql(ctx, r, c, "postgres", "SELECT 1;"); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return fmt.Errorf("%s の DB が応答しません: %w", c.SocketDir, last)
 }
 
 // VerifyAppGrants は、アプリのロールが実際にテーブルを使えることを確かめる。
@@ -103,14 +136,14 @@ func runPsql(ctx context.Context, r Runner, db, sql string) ([]byte, error) {
 // テーブルがあるのにアプリのロールがどれ 1 つ触れないなら、それは設定の
 // 食い違いであって正常な状態ではない。個々のテーブルまでは見ない。
 // 意図して runtime に見せないテーブルはありうる。
-func VerifyAppGrants(ctx context.Context, r Runner, n DBNames) error {
+func VerifyAppGrants(ctx context.Context, r Runner, c Conn, n DBNames) error {
 	const q = `SELECT count(*), count(*) FILTER (
 	  WHERE has_table_privilege($ROLE$%s$ROLE$, c.oid, 'SELECT')
 	     OR has_table_privilege($ROLE$%s$ROLE$, c.oid, 'INSERT'))
 	FROM pg_class c
 	WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r';`
 
-	out, err := runPsql(ctx, r, n.Database,
+	out, err := runPsql(ctx, r, c, n.Database,
 		"-- verify\n"+fmt.Sprintf("\\pset tuples_only on\n\\pset format unaligned\n"+q, n.App, n.App))
 	if err != nil {
 		return fmt.Errorf("%s の権限を確認できません: %w", n.Database, err)
@@ -152,7 +185,7 @@ func parseGrantCounts(out string) (total, granted int, err error) {
 //
 // これを呼ぶのは yunirun remove --drop-database だけ。収束の経路からは
 // 決して呼ばない。宣言を書き間違えただけでデータが消えるのは割に合わない。
-func DropDatabase(ctx context.Context, r Runner, n DBNames) error {
+func DropDatabase(ctx context.Context, r Runner, c Conn, n DBNames) error {
 	// 接続が残っていると DROP DATABASE が拒否される。先に切る。
 	sql := fmt.Sprintf(`
 DO $$ BEGIN
@@ -161,7 +194,7 @@ DO $$ BEGIN
 END $$;
 DROP DATABASE IF EXISTS "%s";
 `, n.Database, n.Database)
-	if _, err := runPsql(ctx, r, "postgres", sql); err != nil {
+	if _, err := runPsql(ctx, r, c, "postgres", sql); err != nil {
 		return fmt.Errorf("%s を落とせません: %w", n.Database, err)
 	}
 	for _, role := range []string{n.App, n.Owner} {
@@ -173,7 +206,7 @@ DO $$ BEGIN
   END IF;
 END $$;
 `, role, role, role)
-		if _, err := runPsql(ctx, r, "postgres", drop); err != nil {
+		if _, err := runPsql(ctx, r, c, "postgres", drop); err != nil {
 			return fmt.Errorf("ロール %s を落とせません: %w", role, err)
 		}
 	}

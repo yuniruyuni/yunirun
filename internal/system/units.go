@@ -199,3 +199,37 @@ func StopUser(ctx context.Context, r Runner, user string, uid int) {
 	_, _ = r.Run(ctx, nil, "loginctl", "disable-linger", user)
 	_, _ = r.Run(ctx, nil, "systemctl", "stop", fmt.Sprintf("user@%d.service", uid))
 }
+
+// SystemUnitDir は root 側の Quadlet が定義を探す場所。
+const SystemUnitDir = "/etc/containers/systemd"
+
+// WriteSystemUnit は root 側の Quadlet unit を置く。
+//
+// 内容が同じなら書かない。書き換えると systemd が変更を検知して無用な
+// 再起動を招く。DB の再起動はアプリの停止に直結するので特に避けたい。
+func WriteSystemUnit(name, content string) error {
+	if err := os.MkdirAll(SystemUnitDir, 0o755); err != nil {
+		return err
+	}
+	p := filepath.Join(SystemUnitDir, name)
+	if old, err := os.ReadFile(p); err == nil && string(old) == content {
+		return nil
+	}
+	return os.WriteFile(p, []byte(content), 0o644)
+}
+
+// StartSystemUnit は Quadlet が生成する service を起動する。
+//
+// Quadlet は <name>.container から <name>.service を生成するので、
+// daemon-reload を挟んでから起動する。既に動いていれば start は何もしない
+// ので、設定を変えた場合に備えて try-restart も送る。
+func StartSystemUnit(ctx context.Context, r Runner, unit string) error {
+	if _, err := r.Run(ctx, nil, "systemctl", "daemon-reload"); err != nil {
+		return fmt.Errorf("unit を読み直せません: %w", err)
+	}
+	svc := strings.TrimSuffix(unit, ".container") + ".service"
+	if _, err := r.Run(ctx, nil, "systemctl", "start", svc); err != nil {
+		return fmt.Errorf("%s を起動できません: %w", svc, err)
+	}
+	return nil
+}
