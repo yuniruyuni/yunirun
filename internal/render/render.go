@@ -283,8 +283,17 @@ func DBUnit(a App, w DBSpec) string {
 	p("Image=%s", w.Image)
 	// 到達経路を持たせない。
 	p("Network=none")
-	p("Volume=%s:/var/lib/postgresql", w.DataDir)
-	p("Volume=%s:/var/run/postgresql", w.SockDir)
+	// postgres として動かし、マウント元の所有者を podman に合わせさせる。
+	//
+	// 公式 image は /var/lib/postgresql が postgres 所有である前提で書かれて
+	// いる。bind mount で root 所有のディレクトリを差し込むと、権限を落とした
+	// 後の mkdir が Permission denied で落ちる。
+	//
+	// :U は podman がマウント元をコンテナのユーザへ chown する指定。uid を
+	// こちらで決め打ちしないで済む (image が変われば変わりうるため)。
+	p("User=postgres")
+	p("Volume=%s:/var/lib/postgresql:U", w.DataDir)
+	p("Volume=%s:/var/run/postgresql:U", w.SockDir)
 	// POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB が入る。root しか
 	// 読めない場所に置く。
 	p("EnvironmentFile=%s", w.EnvFile)
