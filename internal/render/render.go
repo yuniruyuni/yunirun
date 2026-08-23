@@ -259,6 +259,8 @@ type DBSpec struct {
 	DataDir string
 	SockDir string
 	EnvFile string
+	// Owner は初期化で作られる superuser。健康確認にも使う。
+	Owner string
 	// Args は postgres へ渡す追加の引数。資源を絞るのに使う。
 	Args []string
 }
@@ -303,7 +305,12 @@ func DBUnit(a App, w DBSpec) string {
 		p("Exec=%s", strings.Join(w.Args, " "))
 	}
 	// 収束は「応答するまで待つ」で判定するので、ここは systemd 側の目安。
-	p("HealthCmd=pg_isready -q")
+	//
+	// ロールを明示する。省略すると pg_isready は postgres を名乗るが、
+	// この構成では superuser の名前がアプリごとに違う。存在しないロールへの
+	// 接続は毎回 FATAL としてログに残り、健康確認の transient unit も
+	// 失敗扱いになる。
+	p("HealthCmd=pg_isready -q -U %s", w.Owner)
 	p("HealthInterval=10s")
 	p("HealthRetries=5")
 	p("HealthStartPeriod=60s")

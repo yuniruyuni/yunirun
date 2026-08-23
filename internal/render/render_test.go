@@ -346,3 +346,15 @@ func TestDBUnitLetsPodmanFixTheMountOwnership(t *testing.T) {
 		}
 	}
 }
+
+// pg_isready は既定で postgres を名乗る。この構成では superuser の名前が
+// アプリごとに違うので、存在しないロールへの接続が毎回 FATAL としてログに
+// 残り、健康確認の transient unit も失敗扱いになる。
+func TestDBUnitHealthCheckUsesTheOwnerRole(t *testing.T) {
+	got := DBUnit(App{Name: "fighter", Manifest: &manifest.Manifest{}}, DBSpec{
+		Image: "x", Owner: "fighter",
+	})
+	if !strings.Contains(got, "HealthCmd=pg_isready -q -U fighter") {
+		t.Fatalf("所有ロールを渡していない:\n%s", got)
+	}
+}
