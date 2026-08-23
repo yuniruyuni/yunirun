@@ -34,6 +34,8 @@ func main() {
 		err = runRename(ctx, os.Args[2:])
 	case "remove":
 		err = runRemove(ctx, os.Args[2:])
+	case "databases":
+		err = runDatabases(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -82,6 +84,11 @@ func usage() {
   yunirun remove [--drop-database] [--dry-run] <名前>
       アプリの実体を片付ける。root で実行する。先に宣言から外しておくこと。
       DB とロールは既定で残す。--drop-database を付けたときだけ落とす。
+
+  yunirun databases
+      DB を持つアプリの一覧を JSON で出す。バックアップなど外部の処理が
+      DB 名やソケットの場所を知るために使う。名前の規約を yunirun の中に
+      留めるための口。
 
 設定の所在:
   /etc/yunirun/config.json   どのリポジトリを取り込むか (システム側)
