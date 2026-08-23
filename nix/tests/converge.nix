@@ -77,6 +77,16 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    # converge は端末を握ったまま子プロセスを起こす。それが後から書き込むと
+    # ドライバがコマンド出力を base64 として復号できずに落ちる
+    # (Incorrect padding)。中身とは無関係に落ちるので、標準入出力を端末から
+    # 切り離して呼ぶ。失敗したときの診断はファイルに残す。
+    def converge(m, cmd="yunirun converge"):
+        m.succeed(
+            cmd + " </dev/null >/tmp/converge.log 2>&1"
+            " || { cat /tmp/converge.log; exit 1; }"
+        )
+
     machine.wait_for_unit("postgresql.service")
     machine.wait_for_unit("yunirun-converge.service")
 
@@ -132,7 +142,7 @@ pkgs.testers.runNixOSTest {
     with subtest("収束は冪等"):
         # 比較もゲストの中で行う。中身をドライバへ運ぶ必要が無い。
         machine.succeed("cp /var/lib/yunirun/allocations.json /tmp/before.json")
-        machine.succeed("systemctl restart yunirun-converge.service")
+        converge(machine, "systemctl restart yunirun-converge.service")
         machine.succeed(
             "cmp -s /tmp/before.json /var/lib/yunirun/allocations.json"
             " || { echo '再実行で割り当てが変わった'; diff /tmp/before.json"
@@ -158,7 +168,7 @@ pkgs.testers.runNixOSTest {
             "sed -i 's|\"alpha\":|\"aaa\": \"example/aaa\", \"alpha\":|'"
             " /etc/yunirun/config.json"
         )
-        machine.succeed("yunirun converge")
+        converge(machine)
 
         # 既存の割り当てが 1 バイトも動いていないこと。
         machine.succeed(
@@ -181,7 +191,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(
             "sed -i 's|\"aaa\": \"example/aaa\", ||' /etc/yunirun/config.json"
         )
-        machine.succeed("yunirun converge")
+        converge(machine)
         machine.succeed("! loginctl show-user yunirun-aaa -p Linger | grep -q yes")
         machine.succeed("! grep -q 'frontend aaa_in' /etc/yunirun/haproxy.cfg")
 

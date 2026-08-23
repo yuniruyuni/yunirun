@@ -59,6 +59,16 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    # converge は端末を握ったまま子プロセスを起こす。それが後から書き込むと
+    # ドライバがコマンド出力を base64 として復号できずに落ちる
+    # (Incorrect padding)。中身とは無関係に落ちるので、標準入出力を端末から
+    # 切り離して呼ぶ。失敗したときの診断はファイルに残す。
+    def converge(m, cmd="yunirun converge"):
+        m.succeed(
+            cmd + " </dev/null >/tmp/converge.log 2>&1"
+            " || { cat /tmp/converge.log; exit 1; }"
+        )
+
     machine.wait_for_unit("postgresql.service")
     machine.wait_for_unit("yunirun-converge.service")
 
@@ -66,7 +76,7 @@ pkgs.testers.runNixOSTest {
     # 実際は deploy が運んでくるが、ここでは直接置く。
     machine.succeed("mkdir -p /run/yunirun/beta/inbox")
     machine.succeed("cp ${manifest} /run/yunirun/beta/inbox/yunirun.jsonc")
-    machine.succeed("yunirun converge")
+    converge(machine)
 
     with subtest("DB とロールが作られる"):
         # 判定はゲストの中で完結させる。出力を持ち帰って照合すると、
@@ -117,7 +127,7 @@ pkgs.testers.runNixOSTest {
         # 作り直すと DB 側と食い違い、稼働中のコンテナが認証に失敗する。
         # 比較もゲストの中で行う。パスワードを持ち出さずに済む。
         machine.succeed("cp /run/yunirun/beta/runtime.env /tmp/before.env")
-        machine.succeed("yunirun converge")
+        converge(machine)
         machine.succeed(
             "cmp -s /tmp/before.env /run/yunirun/beta/runtime.env"
             " || { echo '再収束でパスワードが変わった'; exit 1; }"
