@@ -18,6 +18,7 @@ func sample() App {
 		LocalTag: "localhost/fighter:current",
 		DBName:   "fighter",
 		DBUser:   "fighter_app",
+		SockDir:  "/var/lib/yunirun-db/fighter/sock",
 		EnvFile:  "/run/yunirun/fighter/runtime.env",
 	}
 }
@@ -35,13 +36,49 @@ func TestContainerUnitPublishesOnlyToLoopback(t *testing.T) {
 
 func TestContainerUnitUsesUnixSocketForDatabase(t *testing.T) {
 	got := ContainerUnit(sample(), "blue")
-	if !strings.Contains(got, "Volume=/run/postgresql:/run/postgresql") ||
-		!strings.Contains(got, "Environment=PGHOST=/run/postgresql") {
+	if !strings.Contains(got, "Environment=PGHOST=/run/postgresql") {
 		t.Fatalf("Unix ソケット経由になっていない:\n%s", got)
 	}
 	// TCP で繋ぐと、コンテナからホストの loopback 上の他サービスにも届く。
 	if strings.Contains(got, "PGHOST=127.0.0.1") || strings.Contains(got, "PGHOST=localhost") {
 		t.Fatalf("TCP で繋ごうとしている:\n%s", got)
+	}
+}
+
+// 見せるのは自分専用 PostgreSQL のソケットだけ。共有ディレクトリを渡すと、
+// パスワードを知っている相手が他アプリの DB へ繋げてしまう。
+func TestContainerUnitMountsOnlyItsOwnSocketDirectory(t *testing.T) {
+	got := ContainerUnit(sample(), "blue")
+	if !strings.Contains(got, "Volume=/var/lib/yunirun-db/fighter/sock:/run/postgresql") {
+		t.Fatalf("自分のソケットを見せていない:\n%s", got)
+	}
+	if strings.Contains(got, "Volume=/run/postgresql:/run/postgresql") {
+		t.Fatalf("共有のソケットディレクトリを渡している:\n%s", got)
+	}
+}
+
+// DB は到達経路を持たない。ネットワークを与えると、同じホスト上の他の
+// コンテナから届きうる。
+func TestDBUnitHasNoNetworkAndKeepsSecretsInAFile(t *testing.T) {
+	got := DBUnit(sample(), DBSpec{
+		Image:   "docker.io/library/postgres:18-alpine",
+		DataDir: "/var/lib/yunirun-db/fighter/data",
+		SockDir: "/var/lib/yunirun-db/fighter/sock",
+		EnvFile: "/run/yunirun/fighter/db.env",
+		Args:    []string{"-c", "shared_buffers=32MB"},
+	})
+	if !strings.Contains(got, "Network=none") {
+		t.Fatalf("到達経路を持たせている:\n%s", got)
+	}
+	if strings.Contains(got, "PublishPort") {
+		t.Fatalf("ポートを公開している:\n%s", got)
+	}
+	if !strings.Contains(got, "EnvironmentFile=/run/yunirun/fighter/db.env") {
+		t.Fatalf("EnvironmentFile が無い:\n%s", got)
+	}
+	// unit ファイルは平文で置かれる。値が出てはいけない。
+	if strings.Contains(got, "POSTGRES_PASSWORD=") {
+		t.Fatalf("パスワードを直接埋め込んでいる:\n%s", got)
 	}
 }
 
@@ -262,5 +299,33 @@ func TestWorkloadEnvOverridesTheAppEnv(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("%q が無い:\n%s", want, out)
 		}
+	}
+}
+
+// Quadlet の Exec はコマンドライン全体を 1 行で書く。引数ごとに 1 行に
+// すると最後の行だけが効き、残りが落ちる。引数が 1 つのうちは偶然動くので
+// 気付きにくい。実際 postgres が
+//
+//	invalid argument: "autovacuum_max_workers=1"
+//
+// で起動できなかった。
+func TestExecIsOneLineForTheWholeCommand(t *testing.T) {
+	a := App{Name: "fighter", Manifest: &manifest.Manifest{}}
+	for _, got := range []string{
+		WorkloadUnit(a, "cleanup", WorkloadSpec{
+			Image: "x", Args: []string{"--batch=cleanup", "--verbose"},
+		}),
+		DBUnit(a, DBSpec{
+			Image: "x", Args: []string{"-c", "shared_buffers=32MB", "-c", "max_connections=20"},
+		}),
+	} {
+		n := strings.Count(got, "\nExec=")
+		if n != 1 {
+			t.Fatalf("Exec が %d 行ある。1 行でなければ引数が落ちる:\n%s", n, got)
+		}
+	}
+	if !strings.Contains(DBUnit(a, DBSpec{Image: "x",
+		Args: []string{"-c", "shared_buffers=32MB"}}), "Exec=-c shared_buffers=32MB") {
+		t.Fatal("引数が繋がっていない")
 	}
 }

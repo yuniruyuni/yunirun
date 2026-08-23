@@ -90,13 +90,15 @@ func runMigrate(ctx context.Context, args []string) error {
 		}
 	}
 
+	sockDir := filepath.Join(cfg.DatabaseDir(), app, "sock")
+
 	args2 := []string{
 		"run", "--rm",
 		// owner パスワードは root しか読めないファイルから読む。
 		"--env-file", filepath.Join(runtimeDir, app, "migration.env"),
-		// DB へは TCP ではなく Unix ソケットで繋ぐ。コンテナは独立した netns に
-		// 置かれるので、ホストの loopback 上の他サービスへは到達できない。
-		"--volume", "/run/postgresql:/run/postgresql",
+		// DB へは TCP ではなく Unix ソケットで繋ぐ。渡すのはこのアプリ専用
+		// PostgreSQL のソケットだけなので、他アプリの DB へは到達しようがない。
+		"--volume", sockDir + ":/run/postgresql",
 		"--env", "PGHOST=/run/postgresql",
 		"--env", "PGPORT=5432",
 		"--env", "DB_USER=" + names.Owner,
@@ -116,7 +118,14 @@ func runMigrate(ctx context.Context, args []string) error {
 	// 適用が通っただけでは足りない。schema 側が書く GRANT の宛先と、yunirun が
 	// 作るロールの名前が食い違っていても pgschema は成功するので、アプリの
 	// ロールが実際にテーブルを使えるところまで見る。
-	if err := system.VerifyAppGrants(ctx, r, names); err != nil {
+	//
+	// 接続には owner の資格情報を使う。この経路は root しか通らない。
+	ownerPassword, err := readEnvValue(filepath.Join(runtimeDir, app, "migration.env"), "DB_PASSWORD")
+	if err != nil {
+		return err
+	}
+	conn := system.Conn{SocketDir: sockDir, Owner: names.Owner, Password: ownerPassword}
+	if err := system.VerifyAppGrants(ctx, r, conn, names); err != nil {
 		return err
 	}
 	return nil
@@ -132,4 +141,18 @@ func readTag(_ *config.Config, app string) (string, error) {
 		return "", fmt.Errorf("タグに使えない文字が含まれています: %q", tag)
 	}
 	return tag, nil
+}
+
+// readEnvValue は KEY=VALUE 形式のファイルから 1 つの値を読む。
+func readEnvValue(path, key string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("%s を読めません: %w", path, err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, key+"="); ok {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("%s に %s がありません", path, key)
 }

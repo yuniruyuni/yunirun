@@ -20,6 +20,8 @@ let
     inherit (cfg) domain adminRecipient hostKeyPath basePort baseUID;
     stateDir = cfg.stateDir;
     homesDir = cfg.homesDir;
+    dbDir = cfg.dbDir;
+    dbImage = cfg.dbImage;
     # yunirun 本体が要るのは名前とリポジトリの対応だけ。認可は NixOS 側の
     # 仕事なので、principal は渡さない。
     apps = lib.mapAttrs (_: a: a.repo) cfg.apps;
@@ -77,6 +79,31 @@ in
       description = ''
         生成した秘密を復号できる管理者の age 公開鍵。
         ホストを失ったときの復旧経路になるので設定を強く勧める。
+      '';
+    };
+
+    dbDir = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/yunirun-db";
+      description = ''
+        アプリ専用 PostgreSQL のデータとソケットを置く場所。
+
+        ホームとは分ける。ホームは rename や remove が捨てるので、そこに
+        データを置くと名前を変えただけで消える。
+
+        podman の名前付きボリュームを使わないのも同じ理由で、
+        podman system prune --volumes の射程に入れないため。
+      '';
+    };
+
+    dbImage = lib.mkOption {
+      type = lib.types.str;
+      default = "docker.io/library/postgres:18-alpine";
+      description = ''
+        アプリ専用 PostgreSQL の image。
+
+        全アプリで同じものを使う。版を上げるときはここを変える。アプリごとに
+        変えたい事情が出たら、そのときにアプリ側の宣言へ移す。
       '';
     };
 
@@ -151,6 +178,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # yunirun は podman と Quadlet の上に立っている。アプリのコンテナは
+    # rootless の user generator が、DB のコンテナは root 側の
+    # system generator が unit に変換する。
+    #
+    # ここで宣言しておかないと隠れた依存になる。実際、VM テストは podman を
+    # 有効にしていなかったために /etc/containers/systemd へ置いた定義が
+    # unit にならず、Unit not found で落ちた。ホスト側で個別の設定を
+    # したい場合に備えて mkDefault にしてある。
+    virtualisation.podman.enable = lib.mkDefault true;
+
     # yunirun を手で実行できるようにする。
     #
     # 実行時に呼ぶ外部コマンドも一緒に入れる。systemd 経由なら PATH を与えて
@@ -166,10 +203,13 @@ in
     systemd.services.yunirun-converge = {
       description = "yunirun: 宣言されたアプリ一覧に実体を一致させる";
       wantedBy = [ "multi-user.target" ];
-      after = [ "postgresql.service" "network-online.target" ];
+      # DB はアプリごとにコンテナとして立てるので、ホストの PostgreSQL には
+      # 依存しない。image の取得に network が要る。
+      #
       # network-online は after だけでなく wants も要る。順序だけ指定しても
       # target 自体が起動しないので、依存として宣言していないと警告になる。
-      wants = [ "postgresql.service" "network-online.target" ];
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
       restartTriggers = [ configFile ];
       path = [ cfg.package ];
       environment.PATH = lib.mkForce runtimePath;
@@ -261,6 +301,9 @@ in
       "d ${cfg.stateDir} 0700 root root -"
       # ホームは stateDir の外。各アプリのホーム自体は 0700 でユーザ所有になる。
       "d ${cfg.homesDir} 0755 root root -"
+      # DB のデータとソケット。ホームとは分ける (rename や remove がホームを
+      # 捨てるため)。中の data は 0700 root、sock は通り抜けのため 0755。
+      "d ${cfg.dbDir} 0755 root root -"
       "d /run/yunirun 0755 root root -"
     ];
   };

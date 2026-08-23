@@ -57,7 +57,6 @@ func runRemove(ctx context.Context, args []string) error {
 	user := alloc.User(name)
 	home := filepath.Join(cfg.HomeDir(), name)
 	vault := filepath.Join(cfg.StateDir, "secrets", name)
-	names := system.NamesFor(name)
 
 	if *dryRun {
 		fmt.Printf("%s (uid=%d frontend=%d) を片付けます\n", name, a.UID, a.Frontend)
@@ -70,9 +69,11 @@ func runRemove(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("  台帳から %s を消す (uid と ポートが再利用可能になる)\n", name)
 		if *dropDB {
-			fmt.Printf("  DB %s とロール %s / %s を落とす\n", names.Database, names.Owner, names.App)
+			fmt.Printf("  DB のコンテナを止めて %s を消す\n",
+				filepath.Join(cfg.DatabaseDir(), name))
 		} else {
-			fmt.Printf("  DB %s とロール %s / %s は残す\n", names.Database, names.Owner, names.App)
+			fmt.Printf("  DB のデータ (%s) は残す\n",
+				filepath.Join(cfg.DatabaseDir(), name))
 		}
 		return nil
 	}
@@ -104,7 +105,9 @@ func runRemove(ctx context.Context, args []string) error {
 	}
 
 	if *dropDB {
-		if err := system.DropDatabase(ctx, r, names); err != nil {
+		// DB はコンテナごと消す。データディレクトリを捨てれば済むので、
+		// SQL で DROP する必要がない。
+		if err := removeDatabaseContainer(ctx, r, cfg, name); err != nil {
 			return err
 		}
 	}
@@ -116,10 +119,28 @@ func runRemove(ctx context.Context, args []string) error {
 
 	fmt.Printf("%s を片付けました\n", name)
 	if !*dropDB {
-		fmt.Printf("\nDB %s とロール %s / %s は残しています。\n",
-			names.Database, names.Owner, names.App)
-		fmt.Printf("中身を確認してから落とすなら --drop-database を付けて実行し直すか、\n")
-		fmt.Printf("psql で直接消してください。\n")
+		fmt.Printf("\nDB のデータは %s に残しています。\n",
+			filepath.Join(cfg.DatabaseDir(), name))
+		fmt.Printf("中身を確認してから消すなら --drop-database を付けて実行し直してください。\n")
+	}
+	return nil
+}
+
+// removeDatabaseContainer は DB のコンテナと unit とデータを片付ける。
+//
+// SQL で DROP DATABASE する必要はない。インスタンスごと消えるため。
+func removeDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.Config, name string) error {
+	svc := name + "-db.service"
+	_, _ = r.Run(ctx, nil, "systemctl", "stop", svc)
+	if err := os.Remove(filepath.Join(system.SystemUnitDir, name+"-db.container")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := r.Run(ctx, nil, "systemctl", "daemon-reload"); err != nil {
+		return err
+	}
+	dir := filepath.Join(cfg.DatabaseDir(), name)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("%s を消せません: %w", dir, err)
 	}
 	return nil
 }

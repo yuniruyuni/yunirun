@@ -33,6 +33,9 @@ type App struct {
 	// DBName と DBUser はアプリ本体が使う DB とロール。
 	DBName string
 	DBUser string
+	// SockDir はこのアプリ専用 PostgreSQL のソケットがある場所。
+	// コンテナにはここだけを見せるので、他アプリの DB へは到達しようがない。
+	SockDir string
 	// EnvFile は秘密を含む環境変数ファイルの位置。tmpfs 上に置き、読めるのは
 	// そのワークロードのユーザだけにする。
 	//
@@ -74,7 +77,7 @@ func ContainerUnit(a App, color string) string {
 		// PostgreSQL へは TCP ではなく Unix ソケットで繋ぐ。コンテナは独立した
 		// netns にいるので、これによりホストの loopback 上の他サービスへは
 		// 到達できないまま DB にだけ届く。
-		p("Volume=/run/postgresql:/run/postgresql")
+		p("Volume=%s:/run/postgresql", a.SockDir)
 		p("Environment=PGHOST=/run/postgresql")
 		p("Environment=PGPORT=5432")
 		p("Environment=DB_USER=%s", a.DBUser)
@@ -195,7 +198,7 @@ func WorkloadUnit(a App, name string, w WorkloadSpec) string {
 		p("Environment=%s=%s", k, w.Env[k])
 	}
 	if a.DBName != "" {
-		p("Volume=/run/postgresql:/run/postgresql")
+		p("Volume=%s:/run/postgresql", a.SockDir)
 		p("Environment=PGHOST=/run/postgresql")
 		p("Environment=PGPORT=5432")
 		p("Environment=DB_USER=%s", w.DBUser)
@@ -205,8 +208,11 @@ func WorkloadUnit(a App, name string, w WorkloadSpec) string {
 	if w.EnvFile != "" {
 		p("EnvironmentFile=%s", w.EnvFile)
 	}
-	for _, arg := range w.Args {
-		p("Exec=%s", arg)
+	// Exec はコマンドライン全体を 1 行で書く。引数ごとに 1 行にすると、
+	// 最後の行だけが効いて残りが落ちる。引数が 1 つのうちは偶然動くので
+	// 気付きにくい。
+	if len(w.Args) > 0 {
+		p("Exec=%s", strings.Join(w.Args, " "))
 	}
 	p("")
 	p("[Service]")
@@ -244,5 +250,61 @@ func TimerUnit(a App, name string, w WorkloadSpec) string {
 	p("")
 	p("[Install]")
 	p("WantedBy=timers.target")
+	return b.String()
+}
+
+// DBSpec はアプリ専用 PostgreSQL の生成に必要な情報。
+type DBSpec struct {
+	Image   string
+	DataDir string
+	SockDir string
+	EnvFile string
+	// Args は postgres へ渡す追加の引数。資源を絞るのに使う。
+	Args []string
+}
+
+// DBUnit はアプリ専用 PostgreSQL の .container を組み立てる。
+//
+// root 側の Quadlet として置く。アプリのユーザで動かすと、初期化に要る
+// owner のパスワードをそのユーザが読めることになり、runtime が owner の
+// 資格情報を持てないという分離が崩れる。
+//
+// ネットワークは持たせない。他から届く経路を無くし、繋げるのはソケットの
+// ディレクトリを共有しているものだけにする。アプリのコンテナには自分の
+// ソケットだけを見せるので、他アプリの DB へは到達しようがない。
+func DBUnit(a App, w DBSpec) string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+
+	p("[Unit]")
+	p("Description=%s の PostgreSQL", a.Name)
+	p("")
+	p("[Container]")
+	p("Image=%s", w.Image)
+	// 到達経路を持たせない。
+	p("Network=none")
+	p("Volume=%s:/var/lib/postgresql", w.DataDir)
+	p("Volume=%s:/var/run/postgresql", w.SockDir)
+	// POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB が入る。root しか
+	// 読めない場所に置く。
+	p("EnvironmentFile=%s", w.EnvFile)
+	// 初期化のたびに同じ設定で立ち上がるよう、引数は unit に持たせる。
+	// Exec はコマンドライン全体を 1 行で書く。
+	if len(w.Args) > 0 {
+		p("Exec=%s", strings.Join(w.Args, " "))
+	}
+	// 収束は「応答するまで待つ」で判定するので、ここは systemd 側の目安。
+	p("HealthCmd=pg_isready -q")
+	p("HealthInterval=10s")
+	p("HealthRetries=5")
+	p("HealthStartPeriod=60s")
+	p("")
+	p("[Service]")
+	// 落ちたら上げ直す。アプリ側は DB が居ないと動かない。
+	p("Restart=always")
+	p("RestartSec=10")
+	p("")
+	p("[Install]")
+	p("WantedBy=multi-user.target")
 	return b.String()
 }

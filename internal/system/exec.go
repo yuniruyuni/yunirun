@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -16,14 +17,27 @@ import (
 type Runner interface {
 	// Run は cmd を実行する。stdin が nil でなければ標準入力へ渡す。
 	Run(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error)
+	// RunEnv は環境変数を足して実行する。
+	//
+	// 秘密を子プロセスへ渡す唯一の手段として要る。argv に載せると ps から
+	// 見えるので、パスワードの類は必ずこちらを使う。env は KEY=VALUE の並び。
+	RunEnv(ctx context.Context, stdin []byte, env []string, name string, args ...string) ([]byte, error)
 }
 
 // ExecRunner は実際にコマンドを起動する Runner。
 type ExecRunner struct{}
 
 // Run は exec.CommandContext で起動する。
-func (ExecRunner) Run(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+func (e ExecRunner) Run(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+	return e.RunEnv(ctx, stdin, nil, name, args...)
+}
+
+// RunEnv は環境変数を足して起動する。
+func (ExecRunner) RunEnv(ctx context.Context, stdin []byte, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
