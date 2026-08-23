@@ -8,6 +8,7 @@ import (
 
 	"github.com/yuniruyuni/yunirun/internal/alloc"
 	"github.com/yuniruyuni/yunirun/internal/config"
+	"github.com/yuniruyuni/yunirun/internal/manifest"
 )
 
 // 書き換えを避けるのは mtime を動かさないため。反映そのものは内容の変化に
@@ -97,5 +98,21 @@ func TestStopUndeclaredNeverTouchesData(t *testing.T) {
 	// 台帳も残す。戻したときに uid とポートが元通りになる。
 	if _, ok := l.Entries["gone"]; !ok {
 		t.Fatal("台帳から消している")
+	}
+}
+
+// バックアップの側で DB 名やソケットの場所を推測させない。規約を変えたときに
+// 静かにずれ、しかも「取れた分だけ成功」に見えるので、気付くのは復元しようと
+// した時になる。
+func TestDatabasesListsOnlyAppsThatDeclareADatabase(t *testing.T) {
+	// dbNamesFor は databaseName の宣言があればそれを使い、無ければアプリ名。
+	// databases はこの導出をそのまま流すことで規約を 1 か所に保つ。
+	m, err := manifest.Parse([]byte(`{"app":{"database":true,"databaseName":"streamer_post"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := dbNamesFor("post", m)
+	if n.Database != "streamer_post" || n.Owner != "streamer_post" || n.App != "streamer_post_app" {
+		t.Fatalf("導出が想定と違う: %+v", n)
 	}
 }
