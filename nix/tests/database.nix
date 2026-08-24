@@ -159,8 +159,8 @@ pkgs.testers.runNixOSTest {
     SOCK = "/var/lib/yunirun-db/beta/sock"
     OWNER = (
         "PGPASSWORD=$(grep -oP '(?<=DB_PASSWORD=).*'"
-        " /run/yunirun/beta/migration.env)"
-        f" psql -h {SOCK} -U beta"
+        " /var/lib/yunirun-env/beta/migration.env)"
+        f" psql -w -h {SOCK} -U beta"
     )
 
     # DB を使うと宣言したマニフェストを置いてから収束させる。
@@ -209,18 +209,18 @@ pkgs.testers.runNixOSTest {
     with subtest("owner パスワードはアプリのユーザから読めない"):
         # これが per-workload 分離の要。runtime が owner の資格情報を持てると、
         # コンテナから脱出された際に DDL まで到達できてしまう。
-        machine.fail("sudo -u yunirun-beta cat /run/yunirun/beta/migration.env")
+        machine.fail("sudo -u yunirun-beta cat /var/lib/yunirun-env/beta/migration.env")
 
     with subtest("自分の runtime.env は読める"):
-        machine.succeed("sudo -u yunirun-beta test -r /run/yunirun/beta/runtime.env")
+        machine.succeed("sudo -u yunirun-beta test -r /var/lib/yunirun-env/beta/runtime.env")
 
     with subtest("app ロールは DDL を実行できない"):
         # パスワードはゲストの中だけで扱う。ドライバへ持ち帰ると、テストの
         # 出力や失敗時の表示に平文で乗る。
         conn = (
             "PGPASSWORD=$(grep -oP '(?<=DB_PASSWORD=).*'"
-            " /run/yunirun/beta/runtime.env)"
-            f" psql -h {SOCK} -U beta_app -d beta -tAc"
+            " /var/lib/yunirun-env/beta/runtime.env)"
+            f" psql -w -h {SOCK} -U beta_app -d beta -tAc"
         )
         # 接続はできる。
         machine.succeed(f"{conn} 'select 1'")
@@ -240,10 +240,10 @@ pkgs.testers.runNixOSTest {
     with subtest("パスワードは再収束で変わらない"):
         # 作り直すと DB 側と食い違い、稼働中のコンテナが認証に失敗する。
         # 比較もゲストの中で行う。パスワードを持ち出さずに済む。
-        machine.succeed("cp /run/yunirun/beta/runtime.env /tmp/before.env")
+        machine.succeed("cp /var/lib/yunirun-env/beta/runtime.env /tmp/before.env")
         converge(machine)
         machine.succeed(
-            "cmp -s /tmp/before.env /run/yunirun/beta/runtime.env"
+            "cmp -s /tmp/before.env /var/lib/yunirun-env/beta/runtime.env"
             " || { echo '再収束でパスワードが変わった'; exit 1; }"
         )
 
@@ -275,7 +275,11 @@ pkgs.testers.runNixOSTest {
         # 依存を消したので、converge を待たずに起動できるはず。
         machine.succeed("systemctl stop beta-db.service")
         machine.succeed("rm -rf /run/yunirun")
-        machine.succeed("systemctl start beta-db.service")
+        machine.succeed(
+            "systemctl start beta-db.service"
+            " || { systemctl status beta-db.service --no-pager;"
+            " journalctl -u beta-db.service --no-pager | tail -40; exit 1; }"
+        )
         machine.succeed("systemctl is-active beta-db.service")
 
         # 後片付け。以降の subtest のために /run を戻す。
