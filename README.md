@@ -160,7 +160,8 @@ Grafana には Prometheus と Loki が最初から繋いである。
 - **どの系が落ちているか**: `haproxy_server_status{state="UP"}`
 - **応答数と失敗数 (RED の R と E)**: `haproxy_backend_http_responses_total`
 - **応答時間 (D)**: `haproxy_backend_response_time_average_seconds`
-- **ログ**: `{job="journal"}`。`unit` と `container` で絞り込める
+- **ログ**: `{job="journal"}`。`container` でアプリごとに絞り込める
+  (`{container="post-blue"}` など)
 
 外から HTTP を叩いても健全性の確認にはならない。Cloudflare の
 `stale-while-revalidate` により、オリジンが完全に止まっていても 200 が返る
