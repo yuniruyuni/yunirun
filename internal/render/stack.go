@@ -121,12 +121,32 @@ func (s StackSpec) AlloyConfig() string {
 	p(`loki.relabel "journal" {`)
 	p(`  forward_to = []`)
 	// どの unit から出たログかが分からないと、アプリごとに絞り込めない。
+	//
+	// どの規則にも regex = "(.+)" を付ける。元が空のとき規則ごと飛ばさせる
+	// ためで、付けないと空の値で上書きしてラベルが消える。
 	p(`  rule {`)
 	p(`    source_labels = ["__journal__systemd_unit"]`)
+	p(`    regex         = "(.+)"`)
 	p(`    target_label  = "unit"`)
 	p(`  }`)
+	// アプリは rootless のユーザ unit で動く。こちらを見ないと、全アプリの
+	// ログが user@<uid>.service という 1 つの塊になり、アプリごとに引けない。
+	// システム unit より後に置いて上書きさせる。
+	p(`  rule {`)
+	p(`    source_labels = ["__journal__systemd_user_unit"]`)
+	p(`    regex         = "(.+)"`)
+	p(`    target_label  = "unit"`)
+	p(`  }`)
+	// container 名で引けるようにする。rootful の podman はこれを journal に
+	// 載せるが、rootless は載せないので、ユーザ unit 名から作る。
 	p(`  rule {`)
 	p(`    source_labels = ["__journal_container_name"]`)
+	p(`    regex         = "(.+)"`)
+	p(`    target_label  = "container"`)
+	p(`  }`)
+	p(`  rule {`)
+	p(`    source_labels = ["__journal__systemd_user_unit"]`)
+	p(`    regex         = "(.+)\\.service"`)
 	p(`    target_label  = "container"`)
 	p(`  }`)
 	p(`}`)

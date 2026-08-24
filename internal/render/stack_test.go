@@ -84,3 +84,28 @@ func TestRetentionAppliesToBothMetricsAndLogs(t *testing.T) {
 		t.Fatal("メトリクス側に効いていない")
 	}
 }
+
+// アプリは rootless のユーザ unit で動く。system unit のフィールドしか見ないと、
+// 全アプリのログが user@<uid>.service という 1 つの塊になり、アプリごとに
+// 引けない。rootless の podman は CONTAINER_NAME も載せない。
+func TestAlloyLabelsRootlessAppLogsPerApp(t *testing.T) {
+	got := spec().AlloyConfig()
+	if !strings.Contains(got, "__journal__systemd_user_unit") {
+		t.Fatalf("ユーザ unit を見ていない:\n%s", got)
+	}
+	// 空で上書きするとラベルごと消える。どの規則にも regex の番人が要る。
+	n := strings.Count(got, `source_labels`)
+	if g := strings.Count(got, `regex         = "(.+)`); g != n {
+		t.Fatalf("regex の番人が足りない: source_labels=%d regex=%d\n%s", n, g, got)
+	}
+}
+
+// システム unit より後に置かないと、アプリのログが user@<uid>.service のまま残る。
+func TestAlloyPrefersTheUserUnitOverTheSystemUnit(t *testing.T) {
+	got := spec().AlloyConfig()
+	sys := strings.Index(got, "__journal__systemd_unit")
+	usr := strings.Index(got, "__journal__systemd_user_unit")
+	if sys < 0 || usr < 0 || usr < sys {
+		t.Fatalf("ユーザ unit がシステム unit より前にある:\n%s", got)
+	}
+}
