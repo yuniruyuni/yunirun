@@ -122,10 +122,7 @@ func runConverge(ctx context.Context, args []string) error {
 	// HAProxy 自体も unit として置く。設定より先に置く必要はないが、
 	// 設定が無いまま起動すると読み込みに失敗するのでこの順にする。
 	unit := render.HAProxyContainer + ".container"
-	if err := system.WriteSystemUnit(unit, render.HAProxyUnit(cfg.HAProxyImage(), *haproxyOut)); err != nil {
-		return err
-	}
-	if err := system.StartSystemUnit(ctx, r, unit); err != nil {
+	if err := system.ApplySystemUnit(ctx, r, unit, render.HAProxyUnit(cfg.HAProxyImage(), *haproxyOut)); err != nil {
 		return err
 	}
 
@@ -704,10 +701,7 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 		},
 	}
 	ra := render.App{Name: name, User: alloc.User(name), Alloc: a}
-	if err := system.WriteSystemUnit(unit, render.DBUnit(ra, spec)); err != nil {
-		return system.Conn{}, err
-	}
-	if err := system.StartSystemUnit(ctx, r, unit); err != nil {
+	if err := system.ApplySystemUnit(ctx, r, unit, render.DBUnit(ra, spec)); err != nil {
 		return system.Conn{}, err
 	}
 
@@ -755,10 +749,7 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if err := system.WriteSystemUnit(name, units[name]); err != nil {
-			return err
-		}
-		if err := system.StartSystemUnit(ctx, r, name); err != nil {
+		if err := system.ApplySystemUnit(ctx, r, name, units[name]); err != nil {
 			return err
 		}
 	}
