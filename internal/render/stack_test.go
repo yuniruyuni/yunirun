@@ -109,3 +109,60 @@ func TestAlloyPrefersTheUserUnitOverTheSystemUnit(t *testing.T) {
 		t.Fatalf("ユーザ unit がシステム unit より前にある:\n%s", got)
 	}
 }
+
+// 全系が落ちたときに発火しないと意味が無い。
+//
+// haproxy_server_status{state="UP"} == 1 と絞ると、全系が落ちた瞬間に系列
+// そのものが消え、閾値の比較対象が無くなる。実機で確認した (絞ると
+// template_out が消え、絞らなければ 0 が残った)。
+func TestAlertsDoNotFilterAwayTheVerySituationTheyWatchFor(t *testing.T) {
+	got := spec().GrafanaAlerting()
+	if strings.Contains(got, `state=\"UP\"} == 1`) {
+		t.Fatalf("全系ダウンで系列ごと消える書き方をしている:\n%s", got)
+	}
+	if !strings.Contains(got, "yunirun-origin-down") {
+		t.Fatalf("オリジン停止の規則が無い:\n%s", got)
+	}
+}
+
+// 計測が届かなくなったこと自体を知りたい。NoData のまま黙られると、
+// 落ちているのか見えていないのかが分からない。
+func TestLosingSightIsItselfAnAlert(t *testing.T) {
+	got := spec().GrafanaAlerting()
+	i := strings.Index(got, "yunirun-metrics-blind")
+	if i < 0 {
+		t.Fatalf("計測断の規則が無い:\n%s", got)
+	}
+	if !strings.Contains(got[i:], "noDataState: Alerting") {
+		t.Fatalf("データが無いときに黙ってしまう:\n%s", got[i:])
+	}
+}
+
+// 規則はデータソースを名前で指す。自動採番だと参照できない。
+func TestAlertsCanReferenceTheDatasource(t *testing.T) {
+	s := spec()
+	if !strings.Contains(s.GrafanaDatasources(), "uid: "+PrometheusUID) {
+		t.Fatal("データソースの uid が固定されていない")
+	}
+	if !strings.Contains(s.GrafanaAlerting(), "datasourceUid: "+PrometheusUID) {
+		t.Fatal("規則がデータソースを指していない")
+	}
+}
+
+// 送り先が無いのに空の url を書くと、Grafana が起動時に取り込みごと失敗する。
+func TestNoContactPointFileWithoutADestination(t *testing.T) {
+	s := spec()
+	if _, ok := s.StackFiles()["grafana-contactpoints.yaml"]; ok {
+		t.Fatal("送り先が無いのに送り先の設定を書いている")
+	}
+	if strings.Contains(s.StackUnits()["yunirun-grafana.container"], "contactpoints") {
+		t.Fatal("無いファイルを mount しようとしている")
+	}
+	s.AlertWebhook = "http://127.0.0.1:5678/webhook/x"
+	if _, ok := s.StackFiles()["grafana-contactpoints.yaml"]; !ok {
+		t.Fatal("送り先を指定したのに設定が出ていない")
+	}
+	if !strings.Contains(s.StackUnits()["yunirun-grafana.container"], "contactpoints") {
+		t.Fatal("送り先の設定が Grafana に渡っていない")
+	}
+}

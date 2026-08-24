@@ -180,6 +180,11 @@ type Observability struct {
 	Dir string `json:"dir"`
 	// Retention は保持期間。空なら既定値。
 	Retention string `json:"retention"`
+	// AlertWebhook はアラートの送り先。空なら送り先を作らない。
+	//
+	// その先が Discord なのかメールなのかを yunirun は知らない。変えるときに
+	// こちらを触らずに済むよう、webhook 1 つに寄せる。
+	AlertWebhook string `json:"alertWebhook"`
 
 	PrometheusImage string `json:"prometheusImage"`
 	LokiImage       string `json:"lokiImage"`
@@ -206,6 +211,7 @@ func (o Observability) Spec(confDir string) render.StackSpec {
 		AlloyImage:      or(o.AlloyImage, "docker.io/grafana/alloy:v1.19.0"),
 		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.0"),
 		Retention:       or(o.Retention, "30d"),
+		AlertWebhook:    o.AlertWebhook,
 	}
 }
 
