@@ -118,6 +118,10 @@ private リポジトリでも認証情報を置かずに済む。
 - **各系の生死は計測の口から見える。** `127.0.0.1:8098/metrics` に HAProxy の
   Prometheus exporter を出す。CDN が古い応答を返している間、外から叩いても
   オリジンの停止には気付けない
+- **計測基盤も yunirun が持つコンテナ。** Prometheus・Loki・Alloy・Grafana を
+  Quadlet で立て、設定も converge が生成する。取り込み対象は HAProxy の
+  exporter だけでよく、そこに全アプリの応答が集まっているのでアプリ側に
+  計装が要らない。ログは journald を読むので、こちらもアプリ側の変更が要らない
 - **秘密の値は unit ファイルに書かない。** unit にはパスだけを置く
 - **復号した値はディスクに置く。** 以前は tmpfs に置いていたが、unit が
   `EnvironmentFile=` で参照するため、再起動で消えると起動そのものが失敗した。
@@ -141,3 +145,26 @@ private リポジトリでも認証情報を置かずに済む。
 状態が追えなくならない。
 
 schema の適用は provision ではなく deploy 側にある。デプロイのたびに必要なため。
+
+## 計測基盤を見る
+
+すべて 127.0.0.1 にだけ bind してある。外から見るときは ssh のポート転送を使う。
+
+```sh
+ssh -N -L 8090:127.0.0.1:8090 yuniruyuni.net
+# http://127.0.0.1:8090 を開く
+```
+
+Grafana には Prometheus と Loki が最初から繋いである。
+
+- **どの系が落ちているか**: `haproxy_server_status{state="UP"}`
+- **応答数と失敗数 (RED の R と E)**: `haproxy_backend_http_responses_total`
+- **応答時間 (D)**: `haproxy_backend_response_time_average_seconds`
+- **ログ**: `{job="journal"}`。`unit` と `container` で絞り込める
+
+外から HTTP を叩いても健全性の確認にはならない。Cloudflare の
+`stale-while-revalidate` により、オリジンが完全に止まっていても 200 が返る
+(実測で確認済み)。オリジンの生死はここで見る。
+
+トレースは入れていない。OTLP を吐くアプリがまだ 1 つも無く、置いても空の
+UI が増えるだけになる。計装したら Tempo を 1 つ足せば繋がる。
