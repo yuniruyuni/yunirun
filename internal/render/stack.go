@@ -186,6 +186,16 @@ func (s StackSpec) GrafanaDatasources() string {
 	var b strings.Builder
 	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
 	p("apiVersion: 1")
+	// 先に同名のものを消す。uid を後から固定したとき、既に別の uid で
+	// 登録されていると Grafana が
+	//   Datasource provisioning error: data source not found
+	// で起動そのものに失敗する。消してから入れ直せばこの経路を通らない。
+	// uid は固定してあるので、入れ直しても参照は切れない。
+	p("deleteDatasources:")
+	p("  - name: Prometheus")
+	p("    orgId: 1")
+	p("  - name: Loki")
+	p("    orgId: 1")
 	p("datasources:")
 	p("  - name: Prometheus")
 	p("    uid: %s", PrometheusUID)

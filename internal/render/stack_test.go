@@ -166,3 +166,23 @@ func TestNoContactPointFileWithoutADestination(t *testing.T) {
 		t.Fatal("送り先の設定が Grafana に渡っていない")
 	}
 }
+
+// uid を後から固定したとき、既に別の uid で登録されていると Grafana は
+// "Datasource provisioning error: data source not found" で起動そのものに
+// 失敗する。実機で踏んだ。消してから入れ直せばこの経路を通らない。
+func TestDatasourcesAreReplacedSoPinningTheUidCannotBreakStartup(t *testing.T) {
+	got := spec().GrafanaDatasources()
+	del := strings.Index(got, "deleteDatasources:")
+	add := strings.Index(got, "\ndatasources:")
+	if del < 0 {
+		t.Fatalf("入れ直していない:\n%s", got)
+	}
+	if add < del {
+		t.Fatalf("消すより先に入れている:\n%s", got)
+	}
+	for _, n := range []string{"Prometheus", "Loki"} {
+		if !strings.Contains(got[del:add], "name: "+n) {
+			t.Fatalf("%s を消していない:\n%s", n, got)
+		}
+	}
+}
