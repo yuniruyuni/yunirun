@@ -21,6 +21,7 @@ let
     stateDir = cfg.stateDir;
     homesDir = cfg.homesDir;
     dbDir = cfg.dbDir;
+    envDir = cfg.envDir;
     dbImage = cfg.dbImage;
     # yunirun 本体が要るのは名前とリポジトリの対応だけ。認可は NixOS 側の
     # 仕事なので、principal は渡さない。
@@ -93,6 +94,22 @@ in
 
         podman の名前付きボリュームを使わないのも同じ理由で、
         podman system prune --volumes の射程に入れないため。
+      '';
+    };
+
+    envDir = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/yunirun-env";
+      description = ''
+        unit が EnvironmentFile= で読む env ファイルを置く場所。
+
+        tmpfs ではなく永続領域に置く。/run に置いていたころ、再起動で消えた
+        env を unit が参照して起動に失敗していた。converge は同じ target に
+        居るだけで順序関係が無く、しかもアプリ側はユーザ unit なので
+        システム unit を After= できない。順序を張るのではなく依存を消す。
+
+        stateDir の中には置けない。stateDir は root 専用 (0700) だが、
+        アプリのユーザ unit が自分の runtime.env まで辿れる必要がある。
       '';
     };
 
@@ -304,6 +321,9 @@ in
       # DB のデータとソケット。ホームとは分ける (rename や remove がホームを
       # 捨てるため)。中の data は 0700 root、sock は通り抜けのため 0755。
       "d ${cfg.dbDir} 0755 root root -"
+      # unit が起動時に読む env。中の各ファイルが権限を持つので、
+      # ディレクトリ自体は辿れればよい。
+      "d ${cfg.envDir} 0755 root root -"
       "d /run/yunirun 0755 root root -"
     ];
   };

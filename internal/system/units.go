@@ -221,8 +221,11 @@ func WriteSystemUnit(name, content string) error {
 // StartSystemUnit は Quadlet が生成する service を起動する。
 //
 // Quadlet は <name>.container から <name>.service を生成するので、
-// daemon-reload を挟んでから起動する。既に動いていれば start は何もしない
-// ので、設定を変えた場合に備えて try-restart も送る。
+// daemon-reload を挟んでから起動する。既に動いていれば start は何もしない。
+//
+// あえて再起動はしない。DB の再起動はアプリの停止に直結するため。unit の
+// 内容を変えた場合、生成された service は daemon-reload で更新されるので、
+// 次にその unit が起動するときから新しい内容になる。
 func StartSystemUnit(ctx context.Context, r Runner, unit string) error {
 	if _, err := r.Run(ctx, nil, "systemctl", "daemon-reload"); err != nil {
 		return fmt.Errorf("unit を読み直せません: %w", err)

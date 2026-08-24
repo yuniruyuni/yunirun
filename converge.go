@@ -19,7 +19,11 @@ import (
 	"github.com/yuniruyuni/yunirun/internal/system"
 )
 
-// runtimeDir は秘密を展開する場所。tmpfs なので再起動で消える。
+// runtimeDir は受け渡し用の置き場所。tmpfs なので再起動で消える。
+//
+// 消えて困らないものだけを置く。ここにあるのは deploy との受け渡し (inbox) と
+// 割り当ての公開 (app.json) で、どちらも converge が書き直せる。unit が
+// 起動時に読む env は消えると起動に失敗するので EnvDir 側に置く。
 const runtimeDir = "/run/yunirun"
 
 func runConverge(ctx context.Context, args []string) error {
@@ -183,8 +187,13 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	}
 
 	names := dbNamesFor(name, m)
-	runtimeEnv := filepath.Join(runtimeDir, name, "runtime.env")
-	migrationEnv := filepath.Join(runtimeDir, name, "migration.env")
+	// env は永続領域に置く。unit が起動時に EnvironmentFile= で読むので、
+	// tmpfs に置くと再起動のたびに converge との競争になる。
+	if err := ensureEnvDir(cfg, name); err != nil {
+		return render.App{}, err
+	}
+	runtimeEnv := cfg.EnvPath(name, "runtime.env")
+	migrationEnv := cfg.EnvPath(name, "migration.env")
 
 	// アプリ固有の秘密を集める。値は /run/agenix から読む。
 	//
@@ -430,6 +439,17 @@ func writeAppInfo(app string, a alloc.Alloc, m *manifest.Manifest) error {
 	return os.WriteFile(appInfoPath(app), b, 0o644)
 }
 
+// ensureEnvDir は env ファイルの置き場所を作る。
+//
+// 中の各ファイルが自分で権限を持つので、ディレクトリ自体は辿れればよい。
+func ensureEnvDir(cfg *config.Config, app string) error {
+	d := filepath.Dir(cfg.EnvPath(app, "x"))
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		return err
+	}
+	return os.Chmod(d, 0o755)
+}
+
 // inboxDir は deploy がマニフェストとタグを置く場所。
 //
 // stateDir は root 専用にしておきたい (台帳や秘密が入っている) ので、アプリが
@@ -603,7 +623,7 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 	}
 
 	// 初期化に使う値。root しか読めない場所に置く。
-	dbEnv := filepath.Join(runtimeDir, name, "db.env")
+	dbEnv := cfg.EnvPath(name, "db.env")
 	if err := writeEnvFile(dbEnv, map[string]string{
 		"POSTGRES_USER":     n.Owner,
 		"POSTGRES_PASSWORD": ownerPassword,

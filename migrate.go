@@ -95,7 +95,7 @@ func runMigrate(ctx context.Context, args []string) error {
 	args2 := []string{
 		"run", "--rm",
 		// owner パスワードは root しか読めないファイルから読む。
-		"--env-file", filepath.Join(runtimeDir, app, "migration.env"),
+		"--env-file", cfg.EnvPath(app, "migration.env"),
 		// DB へは TCP ではなく Unix ソケットで繋ぐ。渡すのはこのアプリ専用
 		// PostgreSQL のソケットだけなので、他アプリの DB へは到達しようがない。
 		"--volume", sockDir + ":/run/postgresql",
@@ -120,7 +120,7 @@ func runMigrate(ctx context.Context, args []string) error {
 	// ロールが実際にテーブルを使えるところまで見る。
 	//
 	// 接続には owner の資格情報を使う。この経路は root しか通らない。
-	ownerPassword, err := readEnvValue(filepath.Join(runtimeDir, app, "migration.env"), "DB_PASSWORD")
+	ownerPassword, err := readEnvValue(cfg.EnvPath(app, "migration.env"), "DB_PASSWORD")
 	if err != nil {
 		return err
 	}

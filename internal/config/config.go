@@ -45,6 +45,16 @@ type Config struct {
 	// DBImage はアプリ専用 PostgreSQL の image。空なら既定値。
 	DBImage string `json:"dbImage"`
 
+	// EnvDir は unit が EnvironmentFile= で読む env ファイルの置き場所。
+	// 空なら既定値。
+	//
+	// tmpfs ではなく永続領域に置く。ここが /run だったころ、再起動で消えた
+	// env を unit が EnvironmentFile= (先頭の - 無し) で参照して起動に失敗して
+	// いた。converge は同じ target に居るだけで順序関係が無く、しかもアプリ側
+	// はユーザ unit なのでシステム unit を After= できない。順序を張るのでは
+	// なく、依存そのものを消す。
+	EnvDir string `json:"envDir"`
+
 	// BasePort と BaseUID は割り当ての起点。既存の仕組みと並行して動かす間、
 	// 帯を重ねないために外から指定できるようにしてある。0 なら既定値。
 	BasePort int `json:"basePort"`
@@ -124,6 +134,22 @@ func (c *Config) DatabaseDir() string {
 		return c.DBDir
 	}
 	return "/var/lib/yunirun-db"
+}
+
+// EnvironmentDir は unit が読む env ファイルの置き場所を返す。
+//
+// stateDir の中には置けない。stateDir は台帳と秘密のために root 専用だが、
+// アプリの unit はユーザ unit なので、自分の runtime.env まで辿れる必要がある。
+func (c *Config) EnvironmentDir() string {
+	if c.EnvDir != "" {
+		return c.EnvDir
+	}
+	return "/var/lib/yunirun-env"
+}
+
+// EnvPath はアプリの env ファイルの位置を返す。
+func (c *Config) EnvPath(app, name string) string {
+	return filepath.Join(c.EnvironmentDir(), app, name)
 }
 
 // DatabaseImage は DB に使う image を返す。

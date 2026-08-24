@@ -60,7 +60,7 @@ func runDatabases(_ context.Context, args []string) error {
 			Name:              n.Database,
 			Owner:             n.Owner,
 			SocketDir:         filepath.Join(cfg.DatabaseDir(), name, "sock"),
-			OwnerPasswordFile: filepath.Join(runtimeDir, name, "migration.env"),
+			OwnerPasswordFile: cfg.EnvPath(name, "migration.env"),
 		})
 	}
 

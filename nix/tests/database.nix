@@ -261,11 +261,25 @@ pkgs.testers.runNixOSTest {
         # DB の宣言が生き残っていること。既定値に落ちていれば database=false に
         # なり、DB のコンテナも env も作られない。
         machine.succeed("systemctl is-active beta-db.service")
-        machine.succeed("test -f /run/yunirun/beta/runtime.env")
+        machine.succeed("test -f /var/lib/yunirun-env/beta/runtime.env")
         machine.succeed(
             f"{OWNER} -d beta -tAc"
             " \"select 1 from pg_database where datname='beta'\" | grep -q 1"
         )
+
+    with subtest("unit は converge 抜きでも起動できる"):
+        # env を tmpfs に置いていたころ、unit の EnvironmentFile= (先頭の -
+        # 無し) が再起動で消えた env を指し、起動そのものが失敗していた。
+        # converge は同じ target に居るだけで順序関係が無く、しかもアプリ側は
+        # ユーザ unit なのでシステム unit を After= できない。順序ではなく
+        # 依存を消したので、converge を待たずに起動できるはず。
+        machine.succeed("systemctl stop beta-db.service")
+        machine.succeed("rm -rf /run/yunirun")
+        machine.succeed("systemctl start beta-db.service")
+        machine.succeed("systemctl is-active beta-db.service")
+
+        # 後片付け。以降の subtest のために /run を戻す。
+        converge(machine)
 
     with subtest("秘密は管理者鍵でも復号できる"):
         # ホストを失ったときの復旧経路。これが無いと DB へ入れなくなる。

@@ -93,6 +93,12 @@ func runRename(ctx context.Context, args []string) error {
 	}
 	// 実行時に公開している側も消す。converge が書き直す。
 	_ = os.RemoveAll(filepath.Join("/run/yunirun", from))
+	// env は converge が新しい名前で書き直すので捨ててよい。
+	_ = os.RemoveAll(filepath.Dir(cfg.EnvPath(from, "x")))
+
+	if err := moveStoredManifest(cfg, from, to); err != nil {
+		return err
+	}
 
 	// 3. ユーザとグループを改名する。uid と gid はそのまま残る。
 	if _, err := r.Run(ctx, nil, "usermod", "-l", toUser, "-d",
@@ -170,4 +176,28 @@ func dropSubIDLines(path, user string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// moveStoredManifest は保存済みの宣言を新しい名前へ移す。
+//
+// 捨ててしまうと converge が既定値で収束し、DB も env も workload も宣言ごと
+// 消えたまま「成功」と報告する。次の deploy まで気付けないので、改名では
+// 必ず持っていく。
+func moveStoredManifest(cfg *config.Config, from, to string) error {
+	b, err := os.ReadFile(storedManifestPath(cfg, from))
+	if os.IsNotExist(err) {
+		// まだ一度も deploy されていないアプリ。移すものが無い。
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	dst := storedManifestPath(cfg, to)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(dst, b, 0o600); err != nil {
+		return err
+	}
+	return os.Remove(storedManifestPath(cfg, from))
 }
