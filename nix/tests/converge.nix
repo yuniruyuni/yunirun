@@ -11,6 +11,9 @@
 # これらは systemd・PostgreSQL・podman が揃った実機でないと確かめられない。
 { pkgs, self, ... }:
 
+let
+  haproxyImage = import ./haproxy-image.nix { inherit pkgs; };
+in
 pkgs.testers.runNixOSTest {
   name = "yunirun-converge";
 
@@ -44,11 +47,24 @@ pkgs.testers.runNixOSTest {
     services.journald.extraConfig = "ForwardToConsole=no";
 
     # 判定をゲストの中で行うために使う。
-    environment.systemPackages = [ pkgs.jq pkgs.age ];
+    environment.systemPackages = [ pkgs.jq pkgs.age pkgs.curl ];
+
+    # VM に外向きのネットワークが無いので、image を事前に読み込ませる。
+    systemd.services.load-haproxy-image = {
+      wantedBy = [ "yunirun-converge.service" ];
+      before = [ "yunirun-converge.service" ];
+      path = [ pkgs.podman ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.podman}/bin/podman load -i ${haproxyImage}";
+      };
+    };
 
     services.yunirun = {
       enable = true;
       domain = "example.test";
+      haproxyImage = "localhost/haproxy-test:latest";
       # アプリ側の秘密を復号する鍵。テストスクリプトが作る。
       secretsKeyPath = "/var/lib/yunirun-secrets-key.txt";
       apps = {
@@ -82,6 +98,9 @@ pkgs.testers.runNixOSTest {
             cmd + " </dev/null >/tmp/converge.log 2>&1"
             " || { cat /tmp/converge.log; exit 1; }"
         )
+
+    # 計測用 listener のポート。render.MetricsPort と揃える。
+    METRICS = 8098
 
     machine.wait_for_unit("yunirun-converge.service")
 
@@ -122,8 +141,11 @@ pkgs.testers.runNixOSTest {
         machine.succeed("test -f /var/lib/yunirun-apps/alpha/.config/containers/systemd/alpha-green.container")
         machine.succeed("test -f /var/lib/yunirun-apps/beta/.config/containers/systemd/beta-blue.container")
 
-    with subtest("HAProxy が起動する"):
+    with subtest("HAProxy がコンテナとして起動する"):
+        # distribution のパッケージではなくコンテナで動かす。配信経路に残る
+        # 最後の「その distribution のもの」だった。
         machine.wait_for_unit("yunirun-haproxy.service")
+        machine.succeed("podman ps --format '{{.Names}}' | grep -qx yunirun-haproxy")
 
     with subtest("HAProxy は書いた設定を実際に配っている"):
         # 設定を書くだけで読み直させないと、ディスク上の内容と動いている
@@ -133,6 +155,23 @@ pkgs.testers.runNixOSTest {
             machine.succeed(f"grep -q 'frontend {app}_in' /etc/yunirun/haproxy.cfg")
         machine.wait_until_succeeds("ss -tln | grep -q 127.0.0.1:8100")
         machine.wait_until_succeeds("ss -tln | grep -q 127.0.0.1:8110")
+
+    with subtest("各系の生死が計測の口から見える"):
+        # HAProxy は各バックエンドを health check しているので、どの系が
+        # 落ちているかを既に知っている。それが外から見えないと、CDN が古い
+        # 応答を返している間オリジンの停止に気付けない。
+        machine.wait_until_succeeds(
+            f"curl -sf -o /dev/null http://127.0.0.1:{METRICS}/metrics"
+        )
+        out = machine.succeed(f"curl -s http://127.0.0.1:{METRICS}/metrics")
+        assert "haproxy_server_status" in out, "系ごとの状態が出ていない"
+        assert "haproxy_backend_http_responses_total" in out, "応答数が出ていない"
+        for app in ["alpha", "beta"]:
+            assert f'proxy="{app}_out"' in out, f"{app} が計測に出ていない"
+
+    with subtest("計測の口はアプリへ繋がない"):
+        # ここは計測専用。アプリへの経路を兼ねると、意図しない口が増える。
+        machine.succeed(f"test 404 = $(curl -s -o /dev/null -w %{{http_code}} http://127.0.0.1:{METRICS}/)")
 
     with subtest("収束は冪等"):
         # 比較もゲストの中で行う。中身をドライバへ運ぶ必要が無い。

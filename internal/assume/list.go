@@ -214,9 +214,9 @@ var assumptions = []Assumption{
 	{
 		ID:   "haproxy/reload-needs-sigusr2",
 		What: "haproxy の再読込は SIGUSR2 で、-c は検査しかしない",
-		Why: "ExecReload に -c だけを書いていたため、アプリを足しても listen が" +
-			"増えなかった。設定には backend があるのにポートが開かないという" +
-			"分かりにくい状態になる。",
+		Why: "-c だけを送っていたため、アプリを足しても listen が増えなかった。" +
+			"設定には backend があるのにポートが開かないという分かりにくい" +
+			"状態になる。いまは converge が podman kill --signal USR2 を送る。",
 		Check: func(ctx context.Context, env Env) error {
 			// 設定に書かれた bind が実際に listen されているかを見る。
 			b, err := os.ReadFile("/etc/yunirun/haproxy.cfg")

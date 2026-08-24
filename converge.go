@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -117,6 +118,16 @@ func runConverge(ctx context.Context, args []string) error {
 	if changed {
 		fmt.Printf("==> HAProxy 設定を書き出しました: %s\n", *haproxyOut)
 	}
+
+	// HAProxy 自体も unit として置く。設定より先に置く必要はないが、
+	// 設定が無いまま起動すると読み込みに失敗するのでこの順にする。
+	unit := render.HAProxyContainer + ".container"
+	if err := system.WriteSystemUnit(unit, render.HAProxyUnit(cfg.HAProxyImage(), *haproxyOut)); err != nil {
+		return err
+	}
+	if err := system.StartSystemUnit(ctx, r, unit); err != nil {
+		return err
+	}
 	// 内容が変わっていなくても毎回読み直させる。
 	//
 	// 変わったときだけにしていたところ、ディスク上の設定と動いている設定が
@@ -127,7 +138,7 @@ func runConverge(ctx context.Context, args []string) error {
 	// 読み直しても、動いている設定と同じなら実質何も起きない。-Ws の
 	// master-worker では worker が入れ替わるだけで、既存の接続は旧 worker が
 	// 処理し終えてから終わる。ずれ続けるより毎回揃える方がよい。
-	if err := reloadHAProxy(ctx, r); err != nil {
+	if err := reloadHAProxy(ctx, r, *haproxyOut); err != nil {
 		return err
 	}
 
@@ -582,10 +593,24 @@ func writeIfChanged(path string, want []byte) (bool, error) {
 //
 // 待たない代わりに、reload の成否はここでは分からない。設定の妥当性は
 // ExecReload の 1 段目が検査し、失敗すれば HAProxy の unit 側に残る。
-func reloadHAProxy(ctx context.Context, r system.Runner) error {
-	if _, err := r.Run(ctx, nil, "systemctl", "--no-block", "try-reload-or-restart",
-		"yunirun-haproxy.service"); err != nil {
-		return fmt.Errorf("HAProxy の読み直しを要求できません: %w", err)
+func reloadHAProxy(ctx context.Context, r system.Runner, configPath string) error {
+	// 動いていなければ何もしない。起動は unit が受け持ち、そのときディスク上の
+	// 設定を読むので、ここで送るものは無い。
+	out, err := r.Run(ctx, nil, "podman", "ps", "--format", "{{.Names}}")
+	if err != nil || !slices.Contains(strings.Fields(string(out)), render.HAProxyContainer) {
+		return nil
+	}
+	// 先に設定を検査する。壊れた設定のまま USR2 を送ると、マスターは新しい
+	// ワーカーを起こせないまま古いものを抱えることになり、何が起きたのかが
+	// 分かりにくい状態になる。
+	if _, err := r.Run(ctx, nil, "podman", "exec", render.HAProxyContainer,
+		"haproxy", "-c", "-q", "-f", configPath); err != nil {
+		return fmt.Errorf("HAProxy の設定が不正です: %w", err)
+	}
+	// USR2 はマスターへの再読込指示。ワーカーを新しい設定で起こし直す。
+	if _, err := r.Run(ctx, nil, "podman", "kill", "--signal", "USR2",
+		render.HAProxyContainer); err != nil {
+		return fmt.Errorf("HAProxy を読み直せません: %w", err)
 	}
 	return nil
 }

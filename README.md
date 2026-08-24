@@ -112,6 +112,12 @@ private リポジトリでも認証情報を置かずに済む。
   Tunnel 経由に限る
 - **PostgreSQL へは Unix ソケットで繋ぐ。** コンテナは独立した netns に置き、
   TCP を使わないことでホストの loopback 上の他サービスへ到達できないようにする
+- **HAProxy もコンテナで動かす。** distribution のパッケージに依存すると、
+  そこだけ移植性が切れる。設定は converge が生成し、`podman kill --signal USR2`
+  で読み直させる
+- **各系の生死は計測の口から見える。** `127.0.0.1:8098/metrics` に HAProxy の
+  Prometheus exporter を出す。CDN が古い応答を返している間、外から叩いても
+  オリジンの停止には気付けない
 - **秘密の値は unit ファイルに書かない。** unit にはパスだけを置く
 - **復号した値はディスクに置く。** 以前は tmpfs に置いていたが、unit が
   `EnvironmentFile=` で参照するため、再起動で消えると起動そのものが失敗した。

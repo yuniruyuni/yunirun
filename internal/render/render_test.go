@@ -358,3 +358,40 @@ func TestDBUnitHealthCheckUsesTheOwnerRole(t *testing.T) {
 		t.Fatalf("所有ロールを渡していない:\n%s", got)
 	}
 }
+
+// 計測の口は常に出す。アプリが 0 個でも、HAProxy 自体の状態は見たい。
+func TestHAProxyAlwaysExposesMetrics(t *testing.T) {
+	for _, apps := range [][]App{nil, {{Name: "a", Manifest: &manifest.Manifest{}}}} {
+		got := HAProxy(apps)
+		if !strings.Contains(got, "prometheus-exporter") {
+			t.Fatalf("計測の口が無い (apps=%d):\n%s", len(apps), got)
+		}
+	}
+}
+
+// コンテナの中には /dev/log が無い。そこを指すとログが黙って消える。
+func TestHAProxyLogsToStdoutBecauseThereIsNoDevLogInAContainer(t *testing.T) {
+	got := HAProxy(nil)
+	if strings.Contains(got, "/dev/log") {
+		t.Fatalf("コンテナに無い /dev/log を指している:\n%s", got)
+	}
+	if !strings.Contains(got, "log stdout") {
+		t.Fatalf("標準出力へ出していない:\n%s", got)
+	}
+}
+
+// -db が無いとコンテナが即座に終了し、-W が無いと USR2 で読み直せない。
+func TestHAProxyUnitRunsInForegroundWithAMaster(t *testing.T) {
+	got := HAProxyUnit("example/haproxy:1", "/etc/yunirun/haproxy.cfg")
+	if !strings.Contains(got, "Exec=haproxy -W -db -f /etc/yunirun/haproxy.cfg") {
+		t.Fatalf("起動指定が違う:\n%s", got)
+	}
+	// 設定を読めないと起動できない。読み取り専用で渡す。
+	if !strings.Contains(got, "Volume=/etc/yunirun/haproxy.cfg:/etc/yunirun/haproxy.cfg:ro") {
+		t.Fatalf("設定が渡っていない:\n%s", got)
+	}
+	// 127.0.0.1 の frontend を開き、同じ 127.0.0.1 のアプリへ繋ぐ。
+	if !strings.Contains(got, "Network=host") {
+		t.Fatalf("ホストのネットワークを使っていない:\n%s", got)
+	}
+}

@@ -55,6 +55,9 @@ type Config struct {
 	// DBImage はアプリ専用 PostgreSQL の image。空なら既定値。
 	DBImage string `json:"dbImage"`
 
+	// HAProxyImage は経路を担う HAProxy の image。空なら既定値。
+	HAProxyImage_ string `json:"haproxyImage"`
+
 	// EnvDir は unit が EnvironmentFile= で読む env ファイルの置き場所。
 	// 空なら既定値。
 	//
@@ -160,6 +163,17 @@ func (c *Config) EnvironmentDir() string {
 // EnvPath はアプリの env ファイルの位置を返す。
 func (c *Config) EnvPath(app, name string) string {
 	return filepath.Join(c.EnvironmentDir(), app, name)
+}
+
+// HAProxyImage は HAProxy に使う image を返す。
+//
+// Prometheus exporter を持つものが要る。公式 image は USE_PROMEX=1 で
+// 組まれているので、そのまま使える。
+func (c *Config) HAProxyImage() string {
+	if c.HAProxyImage_ != "" {
+		return c.HAProxyImage_
+	}
+	return "docker.io/library/haproxy:3.2-alpine"
 }
 
 // DatabaseImage は DB に使う image を返す。

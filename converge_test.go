@@ -3,12 +3,14 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/yuniruyuni/yunirun/internal/alloc"
 	"github.com/yuniruyuni/yunirun/internal/config"
 	"github.com/yuniruyuni/yunirun/internal/manifest"
+	"github.com/yuniruyuni/yunirun/internal/render"
 )
 
 // 書き換えを避けるのは mtime を動かさないため。反映そのものは内容の変化に
@@ -37,24 +39,42 @@ func TestWriteIfChangedReportsWhetherItWrote(t *testing.T) {
 	}
 }
 
-// HAProxy の unit は After=yunirun-converge.service なので、その job は
-// converge が終わるまで走れない。完了を待つと自分が終わらないと進まない
-// job を待つことになり、起動時に固まる。--no-block が要る。
-//
-// try-reload-or-restart なのは、converge が先に走って HAProxy がまだ
-// 動いていない場合に reload だと失敗するため。この形なら何もしない。
-func TestReloadHAProxyDoesNotWaitForItsOwnJob(t *testing.T) {
-	r := &recordingRunner{}
-	if err := reloadHAProxy(t.Context(), r); err != nil {
+// 起動時、converge は HAProxy より先に走る。まだ動いていないものへ信号を
+// 送っても意味が無く、失敗を報告すると収束そのものが失敗扱いになる。
+func TestReloadHAProxySendsNothingWhenItIsNotRunning(t *testing.T) {
+	r := &recordingRunner{out: map[string]string{"podman": "some-other-container\n"}}
+	if err := reloadHAProxy(t.Context(), r, "/etc/yunirun/haproxy.cfg"); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) != 1 {
-		t.Fatalf("呼び出しが 1 件ではない: %v", r.calls)
+	for _, c := range r.calls {
+		if slices.Contains(c, "kill") {
+			t.Fatalf("動いていないのに信号を送った: %v", r.calls)
+		}
 	}
-	got := strings.Join(r.calls[0], " ")
-	want := "systemctl --no-block try-reload-or-restart yunirun-haproxy.service"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
+}
+
+// 壊れた設定のまま USR2 を送ると、マスターは新しいワーカーを起こせないまま
+// 古いものを抱える。先に検査してから送る。
+func TestReloadHAProxyChecksTheConfigBeforeSignalling(t *testing.T) {
+	r := &recordingRunner{out: map[string]string{"podman": render.HAProxyContainer + "\n"}}
+	if err := reloadHAProxy(t.Context(), r, "/etc/yunirun/haproxy.cfg"); err != nil {
+		t.Fatal(err)
+	}
+	var check, kill = -1, -1
+	for i, c := range r.calls {
+		j := strings.Join(c, " ")
+		if strings.Contains(j, "haproxy -c -q") {
+			check = i
+		}
+		if strings.Contains(j, "kill --signal USR2") {
+			kill = i
+		}
+	}
+	if check < 0 || kill < 0 {
+		t.Fatalf("検査と信号の両方が要る: %v", r.calls)
+	}
+	if check > kill {
+		t.Fatalf("検査より先に信号を送っている: %v", r.calls)
 	}
 }
 
