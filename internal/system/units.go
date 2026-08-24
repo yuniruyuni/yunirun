@@ -209,9 +209,10 @@ var SystemUnitDir = "/etc/containers/systemd"
 // 内容が同じなら書き換えない。書き換えると systemd が変更を検知して無用な
 // 再起動を招く。
 //
-// 内容が変わったときは restart する。start だけにしていたところ、unit を
-// 書き換えても動いているコンテナは古い定義のまま残り続けた。Grafana に
-// アラート設定を渡す mount を足したのに、1 時間前の定義で動いたままで、
+// 反映するかどうかは「unit ファイルの更新時刻」と「動いているコンテナの
+// 起動時刻」で決める。内容の変化だけを見ると、書き換え済みで未反映という
+// 状態から抜け出せない。実際、Grafana にアラート設定の mount を足した収束の
+// 次の収束で「内容は同じ」と判定され、1 時間前の定義のまま動き続けた。
 // 規則が 1 つも取り込まれていないのに converge は成功と報告していた。
 //
 // 「宣言どおりにする」のが converge の仕事なので、黙って古いまま残すより
@@ -221,11 +222,7 @@ func ApplySystemUnit(ctx context.Context, r Runner, name, content string) error 
 		return err
 	}
 	p := filepath.Join(SystemUnitDir, name)
-	changed := true
-	if old, err := os.ReadFile(p); err == nil && string(old) == content {
-		changed = false
-	}
-	if changed {
+	if old, err := os.ReadFile(p); err != nil || string(old) != content {
 		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 			return err
 		}
@@ -236,11 +233,44 @@ func ApplySystemUnit(ctx context.Context, r Runner, name, content string) error 
 	}
 	svc := strings.TrimSuffix(name, ".container") + ".service"
 	verb := "start"
-	if changed {
+	if stale(ctx, r, p, containerName(name, content)) {
 		verb = "restart"
 	}
 	if _, err := r.Run(ctx, nil, "systemctl", verb, svc); err != nil {
-		return fmt.Errorf("%s を%sできません: %w", svc, map[string]string{"start": "起動", "restart": "再起動"}[verb], err)
+		return fmt.Errorf("%s を反映できません: %w", svc, err)
 	}
 	return nil
+}
+
+// containerName は unit が作るコンテナの名前を返す。
+//
+// Quadlet の既定は systemd-<unit 名>。ContainerName= を書いてあればそちら。
+func containerName(unit, content string) string {
+	base := strings.TrimSuffix(unit, ".container")
+	for _, line := range strings.Split(content, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ContainerName="); ok {
+			return v
+		}
+	}
+	return "systemd-" + base
+}
+
+// stale は動いているコンテナが unit ファイルより古いかを返す。
+//
+// 動いていない場合は false。そのときは start が受け持つ。
+func stale(ctx context.Context, r Runner, unitPath, container string) bool {
+	fi, err := os.Stat(unitPath)
+	if err != nil {
+		return false
+	}
+	out, err := r.Run(ctx, nil, "podman", "inspect", container,
+		"--format", "{{.State.StartedAt.Unix}}")
+	if err != nil {
+		return false
+	}
+	sec, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return false
+	}
+	return fi.ModTime().Unix() > sec
 }
