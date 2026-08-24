@@ -148,6 +148,16 @@ in
             default = "/var/lib/yunirun-obs";
             description = "メトリクスとログの置き場所。";
           };
+          alertWebhook = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = ''
+              アラートの送り先 (webhook)。空なら送り先を作らない。
+
+              その先が Discord なのかメールなのかを yunirun は知らない。
+              変えるときにこちらを触らずに済むよう webhook 1 つに寄せる。
+            '';
+          };
           retention = lib.mkOption {
             type = lib.types.str;
             default = "30d";

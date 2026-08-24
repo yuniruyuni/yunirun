@@ -40,7 +40,18 @@ type StackSpec struct {
 
 	// Retention は保持期間。metrics と logs の両方に使う。
 	Retention string
+
+	// AlertWebhook はアラートの送り先。空なら送り先を作らない
+	// (規則は入るので Grafana の画面では発火が見える)。
+	AlertWebhook string
 }
+
+// データソースの uid は固定する。アラート規則がここを名前で指すので、
+// Grafana に自動採番させると規則側から参照できない。
+const (
+	PrometheusUID = "yunirun-prometheus"
+	LokiUID       = "yunirun-loki"
+)
 
 // PrometheusConfig は取り込み対象を書き出す。
 //
@@ -177,11 +188,13 @@ func (s StackSpec) GrafanaDatasources() string {
 	p("apiVersion: 1")
 	p("datasources:")
 	p("  - name: Prometheus")
+	p("    uid: %s", PrometheusUID)
 	p("    type: prometheus")
 	p("    access: proxy")
 	p("    url: http://127.0.0.1:%d", PrometheusPort)
 	p("    isDefault: true")
 	p("  - name: Loki")
+	p("    uid: %s", LokiUID)
 	p("    type: loki")
 	p("    access: proxy")
 	p("    url: http://127.0.0.1:%d", LokiPort)
@@ -219,6 +232,31 @@ func stackUnit(name, desc, image string, opts []string) string {
 //
 // 中身が書けないと起動しないので、呼ぶ側は設定を先に置くこと。
 func (s StackSpec) StackUnits() map[string]string {
+	// 送り先が無いときは mount しない。無いファイルを指すと Quadlet が
+	// RequiresMountsFor でその unit ごと起動できなくなる。
+	grafana := []string{
+		fmt.Sprintf("Volume=%s/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/yunirun.yaml:ro", s.ConfDir),
+		fmt.Sprintf("Volume=%s/grafana-alerting.yaml:/etc/grafana/provisioning/alerting/rules.yaml:ro", s.ConfDir),
+	}
+	if s.AlertWebhook != "" {
+		grafana = append(grafana,
+			fmt.Sprintf("Volume=%s/grafana-contactpoints.yaml:/etc/grafana/provisioning/alerting/contactpoints.yaml:ro", s.ConfDir))
+	}
+	grafana = append(grafana,
+		fmt.Sprintf("Volume=%s/grafana:/var/lib/grafana:U", s.Dir),
+		// 127.0.0.1 にだけ bind する。外からは ssh のポート転送で見る。
+		"Environment=GF_SERVER_HTTP_ADDR=127.0.0.1",
+		fmt.Sprintf("Environment=GF_SERVER_HTTP_PORT=%d", GrafanaPort),
+		// 到達できる時点でホストに入れているので、そこで改めて
+		// 認証させる意味が無い。認証を足すのは外へ開くときに。
+		"Environment=GF_AUTH_ANONYMOUS_ENABLED=true",
+		"Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=Admin",
+		"Environment=GF_AUTH_BASIC_ENABLED=false",
+		// 外へ送らない。
+		"Environment=GF_ANALYTICS_REPORTING_ENABLED=false",
+		"Environment=GF_ANALYTICS_CHECK_FOR_UPDATES=false",
+	)
+
 	// :U を付けるのは、bind mount の元が root 所有で、各 image が別々の
 	// 非 root ユーザで動くため。付けないと書き込みが Permission denied になる。
 	return map[string]string{
@@ -249,30 +287,146 @@ func (s StackSpec) StackUnits() map[string]string {
 			}),
 
 		"yunirun-grafana.container": stackUnit(
-			"yunirun-grafana", "Grafana", s.GrafanaImage, []string{
-				fmt.Sprintf("Volume=%s/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/yunirun.yaml:ro", s.ConfDir),
-				fmt.Sprintf("Volume=%s/grafana:/var/lib/grafana:U", s.Dir),
-				// 127.0.0.1 にだけ bind する。外からは ssh のポート転送で見る。
-				"Environment=GF_SERVER_HTTP_ADDR=127.0.0.1",
-				fmt.Sprintf("Environment=GF_SERVER_HTTP_PORT=%d", GrafanaPort),
-				// 到達できる時点でホストに入れているので、そこで改めて
-				// 認証させる意味が無い。認証を足すのは外へ開くときに。
-				"Environment=GF_AUTH_ANONYMOUS_ENABLED=true",
-				"Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=Admin",
-				"Environment=GF_AUTH_BASIC_ENABLED=false",
-				// 外へ送らない。
-				"Environment=GF_ANALYTICS_REPORTING_ENABLED=false",
-				"Environment=GF_ANALYTICS_CHECK_FOR_UPDATES=false",
-			}),
+			"yunirun-grafana", "Grafana", s.GrafanaImage, grafana),
 	}
 }
 
 // StackFiles は生成する設定ファイルを名前つきで返す。
 func (s StackSpec) StackFiles() map[string]string {
-	return map[string]string{
+	out := map[string]string{
 		"prometheus.yml":           s.PrometheusConfig(),
 		"loki.yaml":                s.LokiConfig(),
 		"alloy.alloy":              s.AlloyConfig(),
 		"grafana-datasources.yaml": s.GrafanaDatasources(),
+		"grafana-alerting.yaml":    s.GrafanaAlerting(),
 	}
+	// 送り先が無いときは書かない。空の url を入れると Grafana が起動時に
+	// 設定の取り込みごと失敗する。
+	if s.AlertWebhook != "" {
+		out["grafana-contactpoints.yaml"] = s.GrafanaContactPoints()
+	}
+	return out
+}
+
+// alertRule はアラート 1 件分。
+type alertRule struct {
+	UID, Title, Expr, Op, Threshold, For, Severity, Summary, NoData string
+}
+
+// alertRules は見張る内容。
+//
+// どれも「値をそのまま足す」形で書く。haproxy_server_status{state="UP"} == 1 と
+// 絞ると、全系が落ちたときに系列そのものが消えて閾値の比較対象が無くなり、
+// 最も必要な瞬間に発火しない。実機で確認した (絞ると template_out が消え、
+// 絞らなければ 0 が残った)。
+func alertRules() []alertRule {
+	return []alertRule{
+		{
+			UID: "yunirun-origin-down", Title: "オリジンが落ちている",
+			Expr: `sum by (proxy) (haproxy_server_status{state="UP"})`,
+			Op:   "lt", Threshold: "1", For: "2m", Severity: "critical",
+			Summary: "{{ $labels.proxy }} は生きている系が 1 つも無い",
+			NoData:  "NoData",
+		},
+		{
+			UID: "yunirun-replica-down", Title: "片系だけで動いている",
+			Expr: `sum by (proxy) (haproxy_server_status{state="UP"})`,
+			// デプロイ中は片系が入れ替わるので、そこでは鳴らさない。
+			Op: "lt", Threshold: "2", For: "15m", Severity: "warning",
+			Summary: "{{ $labels.proxy }} は片系だけで動いている",
+			NoData:  "NoData",
+		},
+		{
+			UID: "yunirun-backend-errors", Title: "5xx を返している",
+			Expr: `sum by (proxy) (rate(haproxy_backend_http_responses_total{code="5xx"}[5m]))`,
+			Op:   "gt", Threshold: "0", For: "5m", Severity: "warning",
+			Summary: "{{ $labels.proxy }} が 5xx を返している",
+			NoData:  "NoData",
+		},
+		{
+			UID: "yunirun-metrics-blind", Title: "計測が届いていない",
+			Expr: `up{job="haproxy"}`,
+			Op:   "lt", Threshold: "1", For: "5m", Severity: "critical",
+			// 見えないこと自体が問題なので、データが無い場合も鳴らす。
+			Summary: "HAProxy の計測が取れていない (落ちているかどうかも分からない)",
+			NoData:  "Alerting",
+		},
+	}
+}
+
+// GrafanaAlerting はアラート規則を書き出す。
+func (s StackSpec) GrafanaAlerting() string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+	p("apiVersion: 1")
+	p("groups:")
+	p("  - orgId: 1")
+	p("    name: yunirun")
+	p("    folder: yunirun")
+	p("    interval: 1m")
+	p("    rules:")
+	for _, r := range alertRules() {
+		p("      - uid: %s", r.UID)
+		p("        title: %q", r.Title)
+		// B は閾値の判定。A の結果をこれで見る。
+		p("        condition: B")
+		p("        for: %s", r.For)
+		p("        noDataState: %s", r.NoData)
+		p("        execErrState: Alerting")
+		p("        labels:")
+		p("          severity: %s", r.Severity)
+		p("        annotations:")
+		p("          summary: %q", r.Summary)
+		p("        data:")
+		p("          - refId: A")
+		p("            relativeTimeRange:")
+		p("              from: 300")
+		p("              to: 0")
+		p("            datasourceUid: %s", PrometheusUID)
+		p("            model:")
+		p("              refId: A")
+		p("              instant: true")
+		p("              range: false")
+		p("              editorMode: code")
+		p("              expr: %q", r.Expr)
+		p("          - refId: B")
+		p("            datasourceUid: __expr__")
+		p("            model:")
+		p("              refId: B")
+		p("              type: threshold")
+		p("              expression: A")
+		p("              conditions:")
+		p("                - evaluator:")
+		p("                    type: %s", r.Op)
+		p("                    params: [%s]", r.Threshold)
+	}
+	return b.String()
+}
+
+// GrafanaContactPoints は送り先と振り分けを書き出す。
+//
+// 送り先を 1 つの webhook に寄せるのは、その先 (Discord なのかメールなのか) を
+// yunirun が知らずに済むようにするため。変えるときにこちらを触らなくてよい。
+func (s StackSpec) GrafanaContactPoints() string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+	p("apiVersion: 1")
+	p("contactPoints:")
+	p("  - orgId: 1")
+	p("    name: yunirun")
+	p("    receivers:")
+	p("      - uid: yunirun-webhook")
+	p("        type: webhook")
+	p("        settings:")
+	p("          url: %q", s.AlertWebhook)
+	p("          httpMethod: POST")
+	p("policies:")
+	p("  - orgId: 1")
+	p("    receiver: yunirun")
+	p("    group_by: [alertname, proxy]")
+	p("    group_wait: 30s")
+	p("    group_interval: 5m")
+	// 直っていないものを鳴らし続けない。半日ごとに思い出させる程度にする。
+	p("    repeat_interval: 12h")
+	return b.String()
 }
