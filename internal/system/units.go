@@ -201,38 +201,46 @@ func StopUser(ctx context.Context, r Runner, user string, uid int) {
 }
 
 // SystemUnitDir は root 側の Quadlet が定義を探す場所。
-const SystemUnitDir = "/etc/containers/systemd"
+// テストから差し替えられるよう var にしてある。
+var SystemUnitDir = "/etc/containers/systemd"
 
-// WriteSystemUnit は root 側の Quadlet unit を置く。
+// ApplySystemUnit は root 側の Quadlet unit を置いて、その状態にする。
 //
-// 内容が同じなら書かない。書き換えると systemd が変更を検知して無用な
-// 再起動を招く。DB の再起動はアプリの停止に直結するので特に避けたい。
-func WriteSystemUnit(name, content string) error {
+// 内容が同じなら書き換えない。書き換えると systemd が変更を検知して無用な
+// 再起動を招く。
+//
+// 内容が変わったときは restart する。start だけにしていたところ、unit を
+// 書き換えても動いているコンテナは古い定義のまま残り続けた。Grafana に
+// アラート設定を渡す mount を足したのに、1 時間前の定義で動いたままで、
+// 規則が 1 つも取り込まれていないのに converge は成功と報告していた。
+//
+// 「宣言どおりにする」のが converge の仕事なので、黙って古いまま残すより
+// 短い断を選ぶ。
+func ApplySystemUnit(ctx context.Context, r Runner, name, content string) error {
 	if err := os.MkdirAll(SystemUnitDir, 0o755); err != nil {
 		return err
 	}
 	p := filepath.Join(SystemUnitDir, name)
+	changed := true
 	if old, err := os.ReadFile(p); err == nil && string(old) == content {
-		return nil
+		changed = false
 	}
-	return os.WriteFile(p, []byte(content), 0o644)
-}
-
-// StartSystemUnit は Quadlet が生成する service を起動する。
-//
-// Quadlet は <name>.container から <name>.service を生成するので、
-// daemon-reload を挟んでから起動する。既に動いていれば start は何もしない。
-//
-// あえて再起動はしない。DB の再起動はアプリの停止に直結するため。unit の
-// 内容を変えた場合、生成された service は daemon-reload で更新されるので、
-// 次にその unit が起動するときから新しい内容になる。
-func StartSystemUnit(ctx context.Context, r Runner, unit string) error {
+	if changed {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	// Quadlet は <name>.container から <name>.service を生成する。
 	if _, err := r.Run(ctx, nil, "systemctl", "daemon-reload"); err != nil {
 		return fmt.Errorf("unit を読み直せません: %w", err)
 	}
-	svc := strings.TrimSuffix(unit, ".container") + ".service"
-	if _, err := r.Run(ctx, nil, "systemctl", "start", svc); err != nil {
-		return fmt.Errorf("%s を起動できません: %w", svc, err)
+	svc := strings.TrimSuffix(name, ".container") + ".service"
+	verb := "start"
+	if changed {
+		verb = "restart"
+	}
+	if _, err := r.Run(ctx, nil, "systemctl", verb, svc); err != nil {
+		return fmt.Errorf("%s を%sできません: %w", svc, map[string]string{"start": "起動", "restart": "再起動"}[verb], err)
 	}
 	return nil
 }

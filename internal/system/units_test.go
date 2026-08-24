@@ -133,3 +133,61 @@ func TestWriteUnitsKeepsSystemdOwnedDirectories(t *testing.T) {
 		t.Fatalf("timers.target.wants を消している: %v", err)
 	}
 }
+
+// unit を書き換えても start しか送らないと、動いているコンテナは古い定義の
+// まま残る。Grafana にアラート設定の mount を足したのに 1 時間前の定義で
+// 動き続け、規則が 1 つも入っていないのに converge は成功と報告していた。
+func TestApplySystemUnitRestartsWhenTheDefinitionChanged(t *testing.T) {
+	dir := t.TempDir()
+	old := SystemUnitDir
+	SystemUnitDir = dir
+	t.Cleanup(func() { SystemUnitDir = old })
+
+	r := &okRunner{}
+	if err := ApplySystemUnit(t.Context(), r, "x.container", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(r.commands, "systemctl restart x.service") {
+		t.Fatalf("新規で restart を送っていない: %v", r.commands)
+	}
+
+	// 同じ内容なら触らない。書き換えると無用な再起動を招く。
+	r2 := &okRunner{}
+	if err := ApplySystemUnit(t.Context(), r2, "x.container", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if containsCall(r2.commands, "systemctl restart x.service") {
+		t.Fatalf("内容が同じなのに再起動した: %v", r2.commands)
+	}
+
+	// 変わったら反映させる。
+	r3 := &okRunner{}
+	if err := ApplySystemUnit(t.Context(), r3, "x.container", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(r3.commands, "systemctl restart x.service") {
+		t.Fatalf("内容が変わったのに再起動していない: %v", r3.commands)
+	}
+}
+
+func containsCall(cmds []string, want string) bool {
+	for _, c := range cmds {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+// okRunner は記録しつつ成功を返す。recordingRunner は常に失敗を返すので、
+// 途中で止まらず最後まで進む経路の検証には使えない。
+type okRunner struct{ commands []string }
+
+func (r *okRunner) Run(_ context.Context, _ []byte, name string, args ...string) ([]byte, error) {
+	r.commands = append(r.commands, name+" "+strings.Join(args, " "))
+	return nil, nil
+}
+
+func (r *okRunner) RunEnv(ctx context.Context, stdin []byte, _ []string, name string, args ...string) ([]byte, error) {
+	return r.Run(ctx, stdin, name, args...)
+}
