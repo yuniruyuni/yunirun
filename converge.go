@@ -177,7 +177,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	if err := ensureInbox(name, a); err != nil {
 		return render.App{}, err
 	}
-	m, err := manifest.Load(manifestPath(cfg, name))
+	m, err := loadManifest(cfg, name)
 	if err != nil {
 		return render.App{}, err
 	}
@@ -436,8 +436,44 @@ func writeAppInfo(app string, a alloc.Alloc, m *manifest.Manifest) error {
 // 書く場所だけを分ける。converge と migrate はここから読む。
 func inboxDir(app string) string { return filepath.Join(runtimeDir, app, "inbox") }
 
+// manifestPath は deploy が置く受け渡し用の場所。
+//
+// deploy はアプリのユーザとして動くので stateDir (root 専用) へは書けない。
+// tmpfs 上のこの場所へ置き、converge が root として永続領域へ引き取る。
 func manifestPath(_ *config.Config, app string) string {
 	return filepath.Join(inboxDir(app), "yunirun.jsonc")
+}
+
+// storedManifestPath は引き取った後の置き場所。
+//
+// tmpfs ではなく永続領域に置く。ここを tmpfs のままにしていたため、再起動で
+// 宣言が消え、converge が「ファイルが無い」を既定値として扱って全アプリを
+// 既定設定へ書き戻す状態になっていた。DB を使う宣言も env も workload も
+// 消えるうえ、converge は成功として報告するので気付けない。
+func storedManifestPath(cfg *config.Config, app string) string {
+	return filepath.Join(cfg.StateDir, "manifests", app+".jsonc")
+}
+
+// loadManifest は宣言を読む。
+//
+// deploy が置いた新しいものがあればそれを永続領域へ引き取り、無ければ既に
+// 引き取ってあるものを読む。どちらも無いときだけ既定値になる (まだ一度も
+// deploy されていないアプリ)。
+func loadManifest(cfg *config.Config, app string) (*manifest.Manifest, error) {
+	stored := storedManifestPath(cfg, app)
+	if b, err := os.ReadFile(manifestPath(cfg, app)); err == nil {
+		if err := os.MkdirAll(filepath.Dir(stored), 0o700); err != nil {
+			return nil, err
+		}
+		// 中身を確かめてから引き取る。壊れた宣言で既存のものを潰さない。
+		if _, err := manifest.Parse(b); err != nil {
+			return nil, fmt.Errorf("%s の宣言を読めません: %w", app, err)
+		}
+		if err := os.WriteFile(stored, b, 0o600); err != nil {
+			return nil, err
+		}
+	}
+	return manifest.Load(stored)
 }
 
 func tagPath(app string) string { return filepath.Join(inboxDir(app), "tag") }

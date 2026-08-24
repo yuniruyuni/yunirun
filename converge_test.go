@@ -116,3 +116,81 @@ func TestDatabasesListsOnlyAppsThatDeclareADatabase(t *testing.T) {
 		t.Fatalf("導出が想定と違う: %+v", n)
 	}
 }
+
+// 宣言は tmpfs に置いてはいけない。再起動で消え、converge が「ファイルが
+// 無い」を既定値として扱って全アプリを既定設定へ書き戻す。DB を使う宣言も
+// env も workload も消えるうえ、converge は成功として報告する。
+func TestStoredManifestIsNotOnTmpfs(t *testing.T) {
+	cfg := &config.Config{StateDir: "/var/lib/yunirun"}
+	got := storedManifestPath(cfg, "post")
+	if strings.HasPrefix(got, "/run/") {
+		t.Fatalf("tmpfs 上に置いている: %s", got)
+	}
+	if !strings.HasPrefix(got, cfg.StateDir) {
+		t.Fatalf("永続領域の外に置いている: %s", got)
+	}
+}
+
+// deploy が置いた宣言を converge が引き取ることで、再起動を跨いでも残る。
+func TestLoadManifestAdoptsWhatDeployLeftAndSurvivesTheInboxBeingLost(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir}
+
+	// deploy が inbox へ置いた状態を作る。
+	inbox := inboxDir("post")
+	if err := os.MkdirAll(inbox, 0o755); err != nil {
+		t.Skipf("inbox を作れない環境: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(inbox) })
+	const decl = `{"app":{"database":true,"databaseName":"streamer_post"}}`
+	if err := os.WriteFile(manifestPath(cfg, "post"), []byte(decl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := loadManifest(cfg, "post")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.App.Database || m.App.DatabaseName != "streamer_post" {
+		t.Fatalf("引き取れていない: %+v", m.App)
+	}
+
+	// 再起動で inbox が消えた状況。
+	os.RemoveAll(inbox)
+	m2, err := loadManifest(cfg, "post")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m2.App.Database || m2.App.DatabaseName != "streamer_post" {
+		t.Fatalf("再起動後に宣言が失われている: %+v", m2.App)
+	}
+}
+
+// 壊れた宣言で既に引き取ってあるものを潰さない。
+func TestLoadManifestKeepsTheStoredOneWhenTheNewOneIsBroken(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir}
+	if err := os.MkdirAll(filepath.Join(dir, "manifests"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	good := `{"app":{"database":true}}`
+	if err := os.WriteFile(storedManifestPath(cfg, "post"), []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inbox := inboxDir("post")
+	if err := os.MkdirAll(inbox, 0o755); err != nil {
+		t.Skipf("inbox を作れない環境: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(inbox) })
+	if err := os.WriteFile(manifestPath(cfg, "post"), []byte("{ broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadManifest(cfg, "post"); err == nil {
+		t.Fatal("壊れた宣言を受け入れている")
+	}
+	b, _ := os.ReadFile(storedManifestPath(cfg, "post"))
+	if string(b) != good {
+		t.Fatalf("既存の宣言を潰した: %s", b)
+	}
+}
