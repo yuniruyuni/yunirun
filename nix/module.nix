@@ -19,6 +19,7 @@ let
   configFile = pkgs.writeText "yunirun-config.json" (builtins.toJSON {
     inherit (cfg) domain adminRecipient hostKeyPath secretsKeyPath basePort baseUID;
     haproxyImage = cfg.haproxyImage;
+    observability = cfg.observability;
     stateDir = cfg.stateDir;
     homesDir = cfg.homesDir;
     dbDir = cfg.dbDir;
@@ -126,6 +127,38 @@ in
         stateDir の中には置けない。stateDir は root 専用 (0700) だが、
         アプリのユーザ unit が自分の runtime.env まで辿れる必要がある。
       '';
+    };
+
+    observability = lib.mkOption {
+      default = { };
+      description = ''
+        計測基盤 (メトリクス・ログ・可視化) を立てるかどうか。
+
+        yunirun が管理する付帯コンテナとして立てる。取り込み対象は HAProxy の
+        exporter で、そこに全アプリの応答が集まっているため、アプリ側に計装を
+        足さずに済む。ログは journald を読むので、こちらもアプリ側の変更が要らない。
+
+        どれも 127.0.0.1 にだけ bind する。外から見るときは ssh のポート転送を使う。
+      '';
+      type = lib.types.submodule {
+        options = {
+          enable = lib.mkEnableOption "yunirun の計測基盤";
+          dir = lib.mkOption {
+            type = lib.types.path;
+            default = "/var/lib/yunirun-obs";
+            description = "メトリクスとログの置き場所。";
+          };
+          retention = lib.mkOption {
+            type = lib.types.str;
+            default = "30d";
+            description = "メトリクスとログの保持期間。";
+          };
+          prometheusImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
+          lokiImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
+          alloyImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
+          grafanaImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
+        };
+      };
     };
 
     haproxyImage = lib.mkOption {
@@ -323,6 +356,8 @@ in
       # unit が起動時に読む env。中の各ファイルが権限を持つので、
       # ディレクトリ自体は辿れればよい。
       "d ${cfg.envDir} 0755 root root -"
+      # 計測基盤のデータ。中身は :U で各コンテナのユーザへ渡る。
+      "d ${cfg.observability.dir} 0755 root root -"
       "d /run/yunirun 0755 root root -"
     ];
   };

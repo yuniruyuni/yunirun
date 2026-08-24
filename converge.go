@@ -128,6 +128,10 @@ func runConverge(ctx context.Context, args []string) error {
 	if err := system.StartSystemUnit(ctx, r, unit); err != nil {
 		return err
 	}
+
+	if err := convergeObservability(ctx, r, cfg, filepath.Dir(*haproxyOut)); err != nil {
+		return err
+	}
 	// 内容が変わっていなくても毎回読み直させる。
 	//
 	// 変わったときだけにしていたところ、ディスク上の設定と動いている設定が
@@ -718,3 +722,45 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 
 // dbReadyTries は DB の応答を待つ回数。テストから縮められるよう変数にしてある。
 var dbReadyTries = 60
+
+// convergeObservability は計測基盤を立てる。
+//
+// 設定を先に置いてから unit を起動する。逆にすると、中身が無いまま起動して
+// 失敗し、Restart=always で回り続ける。
+func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Config, confDir string) error {
+	if !cfg.Observability.Enable {
+		return nil
+	}
+	spec := cfg.Observability.Spec(confDir)
+
+	for name, body := range spec.StackFiles() {
+		// 世界読み取り可能にする。中に秘密は無く、各コンテナが別々の
+		// 非 root ユーザで読むため。
+		if err := os.WriteFile(filepath.Join(confDir, name), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	// データの置き場所。中身は :U で各コンテナのユーザへ渡る。
+	for _, d := range []string{"prometheus", "loki", "alloy", "grafana"} {
+		if err := os.MkdirAll(filepath.Join(spec.Dir, d), 0o755); err != nil {
+			return err
+		}
+	}
+
+	// 名前順で回す。順序が毎回変わると、失敗したときのログが読みにくい。
+	units := spec.StackUnits()
+	names := make([]string, 0, len(units))
+	for n := range units {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := system.WriteSystemUnit(name, units[name]); err != nil {
+			return err
+		}
+		if err := system.StartSystemUnit(ctx, r, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}

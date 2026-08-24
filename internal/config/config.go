@@ -14,6 +14,7 @@ import (
 	"sort"
 
 	"github.com/yuniruyuni/yunirun/internal/alloc"
+	"github.com/yuniruyuni/yunirun/internal/render"
 )
 
 // DefaultPath は NixOS モジュールが書き出す場所。
@@ -57,6 +58,9 @@ type Config struct {
 
 	// HAProxyImage は経路を担う HAProxy の image。空なら既定値。
 	HAProxyImage_ string `json:"haproxyImage"`
+
+	// Observability は計測基盤 (メトリクス・ログ・可視化) の設定。
+	Observability Observability `json:"observability"`
 
 	// EnvDir は unit が EnvironmentFile= で読む env ファイルの置き場所。
 	// 空なら既定値。
@@ -163,6 +167,46 @@ func (c *Config) EnvironmentDir() string {
 // EnvPath はアプリの env ファイルの位置を返す。
 func (c *Config) EnvPath(app, name string) string {
 	return filepath.Join(c.EnvironmentDir(), app, name)
+}
+
+// Observability は計測基盤の設定。
+//
+// yunirun が管理する付帯コンテナとして立てる。アプリと違って deploy されない
+// ので、unit も設定も converge が生成する。
+type Observability struct {
+	// Enable が false なら何も立てない。
+	Enable bool `json:"enable"`
+	// Dir はデータの置き場所。空なら既定値。
+	Dir string `json:"dir"`
+	// Retention は保持期間。空なら既定値。
+	Retention string `json:"retention"`
+
+	PrometheusImage string `json:"prometheusImage"`
+	LokiImage       string `json:"lokiImage"`
+	AlloyImage      string `json:"alloyImage"`
+	GrafanaImage    string `json:"grafanaImage"`
+}
+
+func or(v, def string) string {
+	if v != "" {
+		return v
+	}
+	return def
+}
+
+// Spec は既定値を埋めた組み立て指示を返す。
+func (o Observability) Spec(confDir string) render.StackSpec {
+	return render.StackSpec{
+		Dir:     or(o.Dir, "/var/lib/yunirun-obs"),
+		ConfDir: confDir,
+		// タグを固定する。動くものが勝手に変わると、壊れたときに何が
+		// 変わったのかを追えない。
+		PrometheusImage: or(o.PrometheusImage, "docker.io/prom/prometheus:v3.14.0"),
+		LokiImage:       or(o.LokiImage, "docker.io/grafana/loki:3.7.6"),
+		AlloyImage:      or(o.AlloyImage, "docker.io/grafana/alloy:v1.19.0"),
+		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.0"),
+		Retention:       or(o.Retention, "30d"),
+	}
 }
 
 // HAProxyImage は HAProxy に使う image を返す。
