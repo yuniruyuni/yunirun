@@ -57,6 +57,8 @@ let
     exec postgres -c listen_addresses= -c unix_socket_directories=/var/run/postgresql "$@"
   '';
 
+  haproxyImage = import ./haproxy-image.nix { inherit pkgs; };
+
   dbImage = pkgs.dockerTools.buildImage {
     name = "localhost/postgres-test";
     tag = "latest";
@@ -102,6 +104,17 @@ pkgs.testers.runNixOSTest {
 
     # VM に外向きのネットワークが無いので、image を事前に読み込ませる。
     services.yunirun.dbImage = "localhost/postgres-test:latest";
+    services.yunirun.haproxyImage = "localhost/haproxy-test:latest";
+    systemd.services.load-haproxy-image = {
+      wantedBy = [ "yunirun-converge.service" ];
+      before = [ "yunirun-converge.service" ];
+      path = [ pkgs.podman ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.podman}/bin/podman load -i ${haproxyImage}";
+      };
+    };
     systemd.services.load-db-image = {
       wantedBy = [ "yunirun-converge.service" ];
       before = [ "yunirun-converge.service" ];

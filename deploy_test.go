@@ -9,11 +9,13 @@ import (
 // 見たいので、結果は常に空で返す。
 type recordingRunner struct {
 	calls [][]string
+	// out は name ごとに返す標準出力。判定を出力に依存する呼び出しのため。
+	out map[string]string
 }
 
 func (r *recordingRunner) Run(_ context.Context, _ []byte, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, append([]string{name}, args...))
-	return nil, nil
+	return []byte(r.out[name]), nil
 }
 
 // RunEnv は env を無視して Run に流す。argv に何が載ったかだけを見たいので、

@@ -16,6 +16,11 @@ import (
 // Colors は blue/green の名前。順序が入れ替え順になる。
 var Colors = []string{"blue", "green"}
 
+// MetricsPort は Prometheus 形式の計測値を出す listener のポート。
+//
+// アプリの割り当て帯 (basePort 以降) の外に取る。
+const MetricsPort = 8098
+
 // PlaceholderPort はアプリが 0 個のときに置く待機用 listener のポート。
 //
 // アプリの割り当て帯 (8100 以降) より手前に取って、実アプリと重ならないようにする。
@@ -110,7 +115,9 @@ func HAProxy(apps []App) string {
 	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
 
 	p("global")
-	p("  log /dev/log local0")
+	// 標準出力へ出す。コンテナの中には /dev/log が無いので、そこを指すと
+	// ログが黙って消える。podman が拾って journald へ流す。
+	p("  log stdout format raw local0")
 	p("  maxconn 2048")
 	p("")
 	p("defaults")
@@ -120,6 +127,18 @@ func HAProxy(apps []App) string {
 	p("  timeout connect 5s")
 	p("  timeout client  60s")
 	p("  timeout server  60s")
+
+	// 計測用の listener。常に置く。
+	//
+	// HAProxy は各バックエンドを health check しているので、どの系が落ちて
+	// いるかを既に知っている。それが外から見えないと、CDN が古い応答を
+	// 返している間オリジンの停止に気付けない。
+	p("")
+	p("frontend yunirun_metrics")
+	p("  bind 127.0.0.1:%d", MetricsPort)
+	p("  http-request use-service prometheus-exporter if { path /metrics }")
+	// 他のパスは何も返さない。ここは計測専用の口で、アプリへは繋がない。
+	p("  http-request return status 404")
 
 	if len(apps) == 0 {
 		// listener が 1 つも無いと haproxy は
@@ -324,6 +343,44 @@ func DBUnit(a App, w DBSpec) string {
 	// 落ちたら上げ直す。アプリ側は DB が居ないと動かない。
 	p("Restart=always")
 	p("RestartSec=10")
+	p("")
+	p("[Install]")
+	p("WantedBy=multi-user.target")
+	return b.String()
+}
+
+// HAProxyContainer は HAProxy を動かすコンテナの名前。
+//
+// converge が設定を反映させるときに podman へ渡すので、生成側と一致させる。
+const HAProxyContainer = "yunirun-haproxy"
+
+// HAProxyUnit は HAProxy を動かす Quadlet unit を返す。
+//
+// nixpkgs の haproxy をそのまま systemd で動かしていたのをやめ、コンテナに
+// 移した。配信経路に残る最後の「その distribution のパッケージ」だったので、
+// これで yunirun の依存が podman と systemd と Quadlet だけになる。
+func HAProxyUnit(image, configPath string) string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+
+	p("[Unit]")
+	p("Description=yunirun: HAProxy")
+	p("")
+	p("[Container]")
+	p("ContainerName=%s", HAProxyContainer)
+	p("Image=%s", image)
+	// ホストのネットワークをそのまま使う。HAProxy は 127.0.0.1 の frontend を
+	// 開き、同じ 127.0.0.1 のアプリへ繋ぐ。ここを分けると両側に穴を開けること
+	// になり、隔離した意味が無い。
+	p("Network=host")
+	p("Volume=%s:%s:ro", configPath, configPath)
+	// -W はマスター・ワーカー方式。設定の反映 (USR2) をマスターが受ける。
+	// -db は前面で動かす指定で、これが無いとコンテナが即座に終了する。
+	p("Exec=haproxy -W -db -f %s", configPath)
+	p("")
+	p("[Service]")
+	p("Restart=always")
+	p("RestartSec=5")
 	p("")
 	p("[Install]")
 	p("WantedBy=multi-user.target")

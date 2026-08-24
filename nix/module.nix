@@ -18,6 +18,7 @@ let
 
   configFile = pkgs.writeText "yunirun-config.json" (builtins.toJSON {
     inherit (cfg) domain adminRecipient hostKeyPath secretsKeyPath basePort baseUID;
+    haproxyImage = cfg.haproxyImage;
     stateDir = cfg.stateDir;
     homesDir = cfg.homesDir;
     dbDir = cfg.dbDir;
@@ -124,6 +125,21 @@ in
 
         stateDir の中には置けない。stateDir は root 専用 (0700) だが、
         アプリのユーザ unit が自分の runtime.env まで辿れる必要がある。
+      '';
+    };
+
+    haproxyImage = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        経路を担う HAProxy の image。空なら yunirun の既定値。
+
+        distribution のパッケージではなくコンテナで動かす。配信経路に残る
+        最後の「その distribution のもの」だったので、これで依存が podman と
+        systemd と Quadlet だけになる。
+
+        Prometheus exporter を持つものが要る。公式 image は USE_PROMEX=1 で
+        組まれているのでそのまま使える。
       '';
     };
 
@@ -295,37 +311,6 @@ in
       principal = a.principal;
       issuer = "https://token.actions.githubusercontent.com";
     }) cfg.apps;
-
-    # HAProxy は yunirun が生成した設定を読む。アプリの増減に追従させるため、
-    # NixOS の services.haproxy (設定が eval 時に固定される) は使わない。
-    systemd.services.yunirun-haproxy = {
-      description = "yunirun: HAProxy";
-      wantedBy = [ "multi-user.target" ];
-      # converge の後に始めるが、失敗しても道連れにしない。
-      #
-      # Requires にしていたところ、1 アプリの収束に失敗しただけで HAProxy まで
-      # 停止し、収束できた他のアプリが巻き添えで落ちた。converge は失敗した
-      # アプリをスキップして残りを収束させ、経路も保つ作りにしてあるので、
-      # 設定は書き出されている。
-      after = [ "yunirun-converge.service" ];
-      wants = [ "yunirun-converge.service" ];
-      serviceConfig = {
-        Type = "notify";
-        ExecStart = "${pkgs.haproxy}/bin/haproxy -Ws -f /etc/yunirun/haproxy.cfg";
-        # reload は 2 段。まず設定を検査し (壊れた設定で reload すると
-        # マスターが古い設定のまま残り、何が起きたか分かりにくい)、通れば
-        # SIGUSR2 でマスターに再読込を指示する。
-        #
-        # -c だけを書いていたときは検査しかせず、新しいアプリを足しても
-        # listen が増えなかった。設定には backend があるのにポートが開かない
-        # という分かりにくい状態になる。
-        ExecReload = [
-          "${pkgs.haproxy}/bin/haproxy -Ws -f /etc/yunirun/haproxy.cfg -c -q"
-          "${pkgs.coreutils}/bin/kill -USR2 $MAINPID"
-        ];
-        Restart = "always";
-      };
-    };
 
     systemd.tmpfiles.rules = [
       # stateDir には台帳と秘密が入るので root 専用。
