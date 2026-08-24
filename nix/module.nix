@@ -17,7 +17,7 @@ let
 
 
   configFile = pkgs.writeText "yunirun-config.json" (builtins.toJSON {
-    inherit (cfg) domain adminRecipient hostKeyPath basePort baseUID;
+    inherit (cfg) domain adminRecipient hostKeyPath secretsKeyPath basePort baseUID;
     stateDir = cfg.stateDir;
     homesDir = cfg.homesDir;
     dbDir = cfg.dbDir;
@@ -71,6 +71,20 @@ in
       description = ''
         生成した秘密の暗号化に使うホスト側の age 秘密鍵。
         既存の agenix と同じ鍵を使うので、鍵の管理箇所が増えない。
+      '';
+    };
+
+    secretsKeyPath = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        アプリ側の秘密 (secrets/<ENV_NAME>.age) を復号する age 秘密鍵。
+
+        hostKeyPath とは分ける。あちらは ssh のホスト鍵から導いているので
+        ホストを作り直すと変わるが、アプリのリポジトリにある暗号文は人が
+        暗号化したもので、鍵が変わると全アプリで暗号化し直しになる。
+
+        対応する公開鍵は yunirun recipient で表示できる。
       '';
     };
 

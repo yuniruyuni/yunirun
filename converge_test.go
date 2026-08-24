@@ -137,11 +137,11 @@ func TestLoadManifestAdoptsWhatDeployLeftAndSurvivesTheInboxBeingLost(t *testing
 	cfg := &config.Config{StateDir: dir}
 
 	// deploy が inbox へ置いた状態を作る。
+	useTempRuntimeDir(t)
 	inbox := inboxDir("post")
 	if err := os.MkdirAll(inbox, 0o755); err != nil {
-		t.Skipf("inbox を作れない環境: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(inbox) })
 	const decl = `{"app":{"database":true,"databaseName":"streamer_post"}}`
 	if err := os.WriteFile(manifestPath(cfg, "post"), []byte(decl), 0o644); err != nil {
 		t.Fatal(err)
@@ -177,11 +177,11 @@ func TestLoadManifestKeepsTheStoredOneWhenTheNewOneIsBroken(t *testing.T) {
 	if err := os.WriteFile(storedManifestPath(cfg, "post"), []byte(good), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	useTempRuntimeDir(t)
 	inbox := inboxDir("post")
 	if err := os.MkdirAll(inbox, 0o755); err != nil {
-		t.Skipf("inbox を作れない環境: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(inbox) })
 	if err := os.WriteFile(manifestPath(cfg, "post"), []byte("{ broken"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -216,4 +216,15 @@ func TestEnvDirIsReachableFromOutsideTheRootOnlyStateDir(t *testing.T) {
 	if got := cfg.EnvPath("post", "runtime.env"); strings.HasPrefix(got, cfg.StateDir+"/") {
 		t.Fatalf("root 専用の stateDir の中に置いている: %s", got)
 	}
+}
+
+// useTempRuntimeDir は inbox の位置をテスト用に差し替える。
+//
+// 既定は /run/yunirun で、CI の実行ユーザは書けない。以前はそこで skip して
+// いたため、inbox を跨ぐ引き取りのテストが CI で一度も走っていなかった。
+func useTempRuntimeDir(t *testing.T) {
+	t.Helper()
+	old := runtimeDir
+	runtimeDir = t.TempDir()
+	t.Cleanup(func() { runtimeDir = old })
 }

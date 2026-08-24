@@ -36,6 +36,8 @@ func main() {
 		err = runRemove(ctx, os.Args[2:])
 	case "databases":
 		err = runDatabases(ctx, os.Args[2:])
+	case "recipient":
+		err = runRecipient(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -89,6 +91,10 @@ func usage() {
       DB を持つアプリの一覧を JSON で出す。バックアップなど外部の処理が
       DB 名やソケットの場所を知るために使う。名前の規約を yunirun の中に
       留めるための口。
+
+  yunirun recipient
+      アプリ側の秘密を暗号化する宛先 (age 公開鍵) を表示する。アプリの作者は
+      これに向けて secrets/<ENV_NAME>.age を作る。
 
 設定の所在:
   /etc/yunirun/config.json   どのリポジトリを取り込むか (システム側)

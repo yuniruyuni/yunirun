@@ -30,6 +30,16 @@ type Config struct {
 	AdminRecipient string `json:"adminRecipient"`
 	// HostKeyPath はホスト側の age 秘密鍵。
 	HostKeyPath string `json:"hostKeyPath"`
+
+	// SecretsKeyPath はアプリ側の秘密を復号する age 秘密鍵。
+	//
+	// HostKeyPath とは分ける。あちらは ssh のホスト鍵から導いているので、
+	// ホストを作り直すと変わる。アプリのリポジトリにある暗号文は人が
+	// 暗号化したもので、鍵が変わると全アプリで暗号化し直しになる。
+	//
+	// 対応する公開鍵は yunirun recipient で表示できる。アプリ側はそれに
+	// 向けて暗号化する。
+	SecretsKeyPath string `json:"secretsKeyPath"`
 	// Apps はアプリ名からリポジトリ (owner/name) への対応。
 	Apps map[string]string `json:"apps"`
 
