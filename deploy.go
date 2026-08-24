@@ -27,6 +27,11 @@ import (
 type Request struct {
 	Token    string `json:"token"`
 	Manifest string `json:"manifest"`
+	// Secrets は環境変数名から age の暗号文への対応。
+	//
+	// 復号鍵は root しか持たないので、deploy (アプリのユーザ) は中身を
+	// 読めないまま置くだけになる。復号は converge が行う。
+	Secrets map[string]string `json:"secrets"`
 }
 
 var tagRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -79,6 +84,9 @@ func runDeploy(ctx context.Context, args []string) error {
 	}
 	// 受け取ったマニフェストを状態として残す。converge はこれを使う。
 	if err := saveManifest(cfg, app, req.Manifest); err != nil {
+		return err
+	}
+	if err := saveSecrets(cfg, app, req.Secrets); err != nil {
 		return err
 	}
 
@@ -269,6 +277,38 @@ func appFromCurrentUser(cfg *config.Config) (string, error) {
 // 秘密が入っているので root 専用のままにしておく。
 func saveManifest(cfg *config.Config, app, content string) error {
 	return os.WriteFile(manifestPath(cfg, app), []byte(content), 0o644)
+}
+
+// saveSecrets は受け取った暗号文を converge へ渡すために置く。
+//
+// 毎回ディレクトリごと作り直す。アプリ側で秘密を消したことを反映させたいので、
+// 差分ではなく総入れ替えにする。deploy が秘密を運ばなかった場合 (Secrets が
+// nil) だけは、ディレクトリを作らずに converge の判断へ委ねる。
+func saveSecrets(cfg *config.Config, app string, secrets map[string]string) error {
+	if secrets == nil {
+		return nil
+	}
+	dir := inboxSecretsDir(app)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for name, body := range secrets {
+		// 名前と中身はここでも見る。converge まで運んでから弾くと、
+		// 何が悪いのかがデプロイのログに出ない。
+		if err := checkSecretName(name); err != nil {
+			return err
+		}
+		if err := checkSecretBody(name, []byte(body)); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".age"), []byte(body), 0o400); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func saveTag(_ *config.Config, app, tag string) error {

@@ -24,7 +24,9 @@ import (
 // 消えて困らないものだけを置く。ここにあるのは deploy との受け渡し (inbox) と
 // 割り当ての公開 (app.json) で、どちらも converge が書き直せる。unit が
 // 起動時に読む env は消えると起動に失敗するので EnvDir 側に置く。
-const runtimeDir = "/run/yunirun"
+// テストから差し替えられるよう var にしてある。const のままだと、inbox を
+// 作れない環境でテストが skip され、走っていないことに気付けない。
+var runtimeDir = "/run/yunirun"
 
 func runConverge(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("converge", flag.ExitOnError)
@@ -185,6 +187,10 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	if err != nil {
 		return render.App{}, err
 	}
+	// 暗号文も宣言と同じく deploy が運んでくる。同じ場所で引き取る。
+	if err := adoptAppSecrets(cfg, name); err != nil {
+		return render.App{}, err
+	}
 
 	names := dbNamesFor(name, m)
 	// env は永続領域に置く。unit が起動時に EnvironmentFile= で読むので、
@@ -195,11 +201,11 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	runtimeEnv := cfg.EnvPath(name, "runtime.env")
 	migrationEnv := cfg.EnvPath(name, "migration.env")
 
-	// アプリ固有の秘密を集める。値は /run/agenix から読む。
-	//
-	// 実体を infra 側 (agenix) に置くのは、アプリのリポジトリに秘密を置かない
-	// という方針のため。アプリ側は名前だけを宣言する。
+	// アプリ固有の秘密を集める。
 	runtimeEnvVars := map[string]string{}
+
+	// infra 側 (agenix) に置く旧方式。アプリは名前だけを宣言する。
+	// アプリ側 (secrets/<ENV>.age) へ移行済みのものはここに現れない。
 	for envName, secretName := range m.App.Secrets {
 		v, err := os.ReadFile(filepath.Join("/run/agenix", secretName))
 		if err != nil {
@@ -208,6 +214,16 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		// 末尾改行を落とす。agenix の値に乗っていることがあり、環境変数へ
 		// そのまま入ると認証などが静かに失敗する。
 		runtimeEnvVars[envName] = strings.TrimRight(string(v), "\r\n")
+	}
+
+	// アプリ側 (secrets/<ENV>.age) に置く方式。deploy が暗号文のまま運び、
+	// ここで初めて復号する。
+	appSecrets, err := loadAppSecrets(ctx, r, cfg, name)
+	if err != nil {
+		return render.App{}, err
+	}
+	for envName, v := range appSecrets {
+		runtimeEnvVars[envName] = v
 	}
 
 	// DB を使わないアプリには作らない。作ると消し忘れた資源が溜まるうえ、
@@ -245,11 +261,15 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		}
 	}
 
-	// 秘密を tmpfs へ展開する。読めるのはこのアプリのユーザだけ。
+	// 秘密を展開する。読めるのはこのアプリのユーザだけ。
 	if len(runtimeEnvVars) > 0 {
 		if err := writeEnvFile(runtimeEnv, runtimeEnvVars, a.UID, a.GID); err != nil {
 			return render.App{}, err
 		}
+	} else if err := os.Remove(runtimeEnv); err != nil && !os.IsNotExist(err) {
+		// 秘密が全部消えたら実体も消す。残すと、宣言から外したはずの値が
+		// ディスク上に居座り続ける。
+		return render.App{}, err
 	}
 
 	// deploy が読むための情報を tmpfs へ置く。
@@ -401,9 +421,16 @@ func writeEnvFile(path string, kv map[string]string, uid, gid int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	// 並びを固定する。map の走査順は毎回変わるので、そのまま書くと同じ内容でも
+	// ファイルが変わる。生成物は決定的にしておく。
+	keys := make([]string, 0, len(kv))
+	for k := range kv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	var b []byte
-	for k, v := range kv {
-		b = append(b, []byte(k+"="+v+"\n")...)
+	for _, k := range keys {
+		b = append(b, []byte(k+"="+kv[k]+"\n")...)
 	}
 	// 先に 0600 で作ってから所有者を移す。順序を逆にすると、一瞬でも
 	// 意図しない相手が読める窓ができる。

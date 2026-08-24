@@ -44,11 +44,13 @@ pkgs.testers.runNixOSTest {
     services.journald.extraConfig = "ForwardToConsole=no";
 
     # 判定をゲストの中で行うために使う。
-    environment.systemPackages = [ pkgs.jq ];
+    environment.systemPackages = [ pkgs.jq pkgs.age ];
 
     services.yunirun = {
       enable = true;
       domain = "example.test";
+      # アプリ側の秘密を復号する鍵。テストスクリプトが作る。
+      secretsKeyPath = "/var/lib/yunirun-secrets-key.txt";
       apps = {
         # 認可先は必ず明示する。導出は無い。
         alpha = {
@@ -187,6 +189,54 @@ pkgs.testers.runNixOSTest {
         converge(machine)
         machine.succeed("! loginctl show-user yunirun-aaa -p Linger | grep -q yes")
         machine.succeed("! grep -q 'frontend aaa_in' /etc/yunirun/haproxy.cfg")
+
+    with subtest("アプリ側の秘密は暗号文のまま運ばれ converge が復号する"):
+        # 受信者鍵はホスト鍵とは別に持つ。ホスト鍵は ssh のホスト鍵から
+        # 導いているので、ホストを作り直すと全アプリで暗号化し直しになる。
+        machine.succeed("age-keygen -o /var/lib/yunirun-secrets-key.txt 2>/dev/null")
+        machine.succeed("chmod 400 /var/lib/yunirun-secrets-key.txt")
+        pub = machine.succeed("yunirun recipient").strip()
+        assert pub.startswith("age1"), f"公開鍵を取れない: {pub}"
+
+        # deploy が置いた状態を作る。deploy はアプリのユーザなので鍵を持たず、
+        # 暗号文を置くことしかできない。
+        machine.succeed("mkdir -p /run/yunirun/alpha/inbox/secrets")
+        machine.succeed(
+            f"printf %s 's3cret-value' | age -a -r {pub}"
+            " > /run/yunirun/alpha/inbox/secrets/API_TOKEN.age"
+        )
+        converge(machine)
+        machine.succeed(
+            "grep -qx 'API_TOKEN=s3cret-value'"
+            " /var/lib/yunirun-env/alpha/runtime.env"
+        )
+
+    with subtest("秘密は再起動を跨いで残る"):
+        # 暗号文が inbox (tmpfs) にしか無いと、再起動後の収束で秘密が消え、
+        # アプリが設定を失ったまま起動してしまう。
+        machine.succeed("rm -rf /run/yunirun/alpha/inbox")
+        machine.succeed("rm -f /var/lib/yunirun-env/alpha/runtime.env")
+        converge(machine)
+        machine.succeed(
+            "grep -qx 'API_TOKEN=s3cret-value'"
+            " /var/lib/yunirun-env/alpha/runtime.env"
+        )
+
+    with subtest("アプリ側で消した秘密はホストからも消える"):
+        # 差分で足すだけにすると、消したはずの値が環境変数に残り続ける。
+        machine.succeed("mkdir -p /run/yunirun/alpha/inbox/secrets")
+        converge(machine)
+        machine.succeed("test ! -f /var/lib/yunirun-env/alpha/runtime.env")
+        machine.succeed("test ! -e /var/lib/yunirun/appsecrets/alpha/API_TOKEN.age")
+
+    with subtest("age の暗号文でないものは受け付けない"):
+        machine.succeed("mkdir -p /run/yunirun/alpha/inbox/secrets")
+        machine.succeed(
+            "printf %s 'plain' > /run/yunirun/alpha/inbox/secrets/OOPS.age"
+        )
+        machine.fail("yunirun converge </dev/null >/tmp/converge.log 2>&1")
+        machine.succeed("rm -rf /run/yunirun/alpha/inbox/secrets")
+        converge(machine)
 
     with subtest("止めるだけで消さない"):
         # 宣言の書き間違いでデータが飛ぶのは割に合わない。片付けは
