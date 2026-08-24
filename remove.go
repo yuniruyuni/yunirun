@@ -86,6 +86,10 @@ func runRemove(ctx context.Context, args []string) error {
 		return fmt.Errorf("%s を消せません: %w", home, err)
 	}
 	_ = os.RemoveAll(filepath.Join(runtimeDir, name))
+	// env と宣言も捨てる。どちらも永続領域にあるので、放っておくと消した
+	// アプリの秘密と宣言がディスクに残り続ける。
+	_ = os.RemoveAll(filepath.Dir(cfg.EnvPath(name, "x")))
+	_ = os.Remove(storedManifestPath(cfg, name))
 
 	// userdel は先に home を消してあるので -r を付けない。付けると既に無い
 	// ディレクトリについて警告を出す。

@@ -194,3 +194,26 @@ func TestLoadManifestKeepsTheStoredOneWhenTheNewOneIsBroken(t *testing.T) {
 		t.Fatalf("既存の宣言を潰した: %s", b)
 	}
 }
+
+// unit が EnvironmentFile= で参照する env は、起動時に必ず存在していなければ
+// ならない。tmpfs に置くと再起動のたびに converge との競争になり、負けると
+// unit は起動に失敗する。しかもアプリ側はユーザ unit なのでシステム unit を
+// After= できず、順序では直せない。
+func TestUnitEnvFilesAreNotOnTmpfs(t *testing.T) {
+	cfg := &config.Config{StateDir: "/var/lib/yunirun"}
+	for _, name := range []string{"runtime.env", "db.env", "migration.env"} {
+		got := cfg.EnvPath("post", name)
+		if strings.HasPrefix(got, "/run/") {
+			t.Fatalf("%s を tmpfs 上に置いている: %s", name, got)
+		}
+	}
+}
+
+// stateDir は root 専用 (0700) なので、その中に置くとアプリのユーザ unit が
+// 自分の runtime.env まで辿れない。
+func TestEnvDirIsReachableFromOutsideTheRootOnlyStateDir(t *testing.T) {
+	cfg := &config.Config{StateDir: "/var/lib/yunirun"}
+	if got := cfg.EnvPath("post", "runtime.env"); strings.HasPrefix(got, cfg.StateDir+"/") {
+		t.Fatalf("root 専用の stateDir の中に置いている: %s", got)
+	}
+}
