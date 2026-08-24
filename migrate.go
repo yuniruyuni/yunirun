@@ -49,7 +49,7 @@ func runMigrate(ctx context.Context, args []string) error {
 		return fmt.Errorf("%s は取り込まれていません", app)
 	}
 
-	m, err := manifest.Load(manifestPath(cfg, app))
+	m, err := manifest.Load(storedManifestPath(cfg, app))
 	if err != nil {
 		return err
 	}

@@ -247,6 +247,26 @@ pkgs.testers.runNixOSTest {
             " || { echo '再収束でパスワードが変わった'; exit 1; }"
         )
 
+    with subtest("宣言は再起動を跨いで残る"):
+        # 宣言を tmpfs にしか置いていなかったため、再起動で消え、converge が
+        # 「ファイルが無い」を既定値として扱って全アプリを既定設定へ書き戻す
+        # 状態だった。DB を使う宣言も env も workload も消えるうえ、converge は
+        # 成功として報告するので気付けない。
+        machine.succeed("test -f /var/lib/yunirun/manifests/beta.jsonc")
+
+        # /run の消失を再現する。
+        machine.succeed("rm -rf /run/yunirun/beta/inbox")
+        converge(machine)
+
+        # DB の宣言が生き残っていること。既定値に落ちていれば database=false に
+        # なり、DB のコンテナも env も作られない。
+        machine.succeed("systemctl is-active beta-db.service")
+        machine.succeed("test -f /run/yunirun/beta/runtime.env")
+        machine.succeed(
+            f"{OWNER} -d beta -tAc"
+            " \"select 1 from pg_database where datname='beta'\" | grep -q 1"
+        )
+
     with subtest("秘密は管理者鍵でも復号できる"):
         # ホストを失ったときの復旧経路。これが無いと DB へ入れなくなる。
         machine.succeed("test -f /var/lib/yunirun/secrets/beta/beta-db-owner.age")

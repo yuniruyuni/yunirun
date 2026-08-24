@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -41,7 +42,12 @@ func runDatabases(_ context.Context, args []string) error {
 
 	out := []Database{}
 	for _, name := range cfg.Names() {
-		m, err := manifest.Load(manifestPath(cfg, name))
+		// 宣言が失われていると DB を使わないアプリに見え、黙って
+		// バックアップの対象から外れる。存在を必須にする。
+		if _, err := os.Stat(storedManifestPath(cfg, name)); err != nil {
+			return fmt.Errorf("%s の宣言が見つかりません: %w", name, err)
+		}
+		m, err := manifest.Load(storedManifestPath(cfg, name))
 		if err != nil {
 			return err
 		}
