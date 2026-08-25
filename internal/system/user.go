@@ -154,32 +154,53 @@ func GroupGID(name string) (int, error) {
 	return strconv.Atoi(g.Gid)
 }
 
-// AddToGroup はユーザを補助グループへ入れる。
+// AddToGroup はユーザを補助グループへ入れる。入れたときだけ true を返す。
 //
 // 既に入っていれば何もしない。無条件に usermod を呼ぶと、linger でプロセスが
 // 動いているユーザに対して失敗することがある。
-func AddToGroup(ctx context.Context, r Runner, userName, group string) error {
+//
+// 補助グループはプロセスの起動時に決まる。既に動いているユーザの systemd
+// インスタンスは新しい所属を持たないので、その配下のコンテナも持てない。
+// 呼ぶ側は true のときにインスタンスを入れ直すこと。
+//
+// 実際に踏んだ: グループを足したのに keep-groups が効かず、コンテナの中では
+// 65534(nobody) に見えていた。保つべき所属が最初から無かった。
+func AddToGroup(ctx context.Context, r Runner, userName, group string) (bool, error) {
 	u, err := user.Lookup(userName)
 	if err != nil {
-		return err
+		return false, err
 	}
 	gids, err := u.GroupIds()
 	if err != nil {
-		return err
+		return false, err
 	}
 	g, err := user.LookupGroup(group)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, id := range gids {
 		if id == g.Gid {
-			return nil
+			return false, nil
 		}
 	}
 	if _, err := r.Run(ctx, nil, "usermod", "-aG", group, userName); err != nil {
-		return fmt.Errorf("%s を %s に入れられません: %w", userName, group, err)
+		return false, fmt.Errorf("%s を %s に入れられません: %w", userName, group, err)
 	}
-	return nil
+	return true, nil
+}
+
+// RestartUserInstance はユーザの systemd インスタンスを入れ直す。
+//
+// 補助グループを足した後に要る。インスタンスは起動時の所属のまま動き続け、
+// 配下のコンテナもそれを継ぐので、入れ直さないと新しい所属が効かない。
+//
+// 配下のコンテナが一度落ちる。所属が効かないまま動き続けるより短い断を選ぶ。
+func RestartUserInstance(ctx context.Context, r Runner, uid int) error {
+	unit := fmt.Sprintf("user@%d.service", uid)
+	if _, err := r.Run(ctx, nil, "systemctl", "restart", unit); err != nil {
+		return fmt.Errorf("%s を入れ直せません: %w", unit, err)
+	}
+	return waitUserInstance(ctx, r, uid)
 }
 
 // Chgrp は名前でグループを引いて付け替える。

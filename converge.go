@@ -319,8 +319,18 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	if cfg.Observability.Enable {
 		ra.TraceSockDir = cfg.Observability.TraceSocketDir()
 		// ソケットはグループで守ってある。所属していないと繋げない。
-		if err := system.AddToGroup(ctx, r, user, render.TraceGroup); err != nil {
+		//
+		// 足したときはユーザの systemd インスタンスを入れ直す。補助グループは
+		// プロセスの起動時に決まるので、動き続けているインスタンスは新しい
+		// 所属を持たず、配下のコンテナも持てない。
+		added, err := system.AddToGroup(ctx, r, user, render.TraceGroup)
+		if err != nil {
 			return render.App{}, err
+		}
+		if added {
+			if err := system.RestartUserInstance(ctx, r, a.UID); err != nil {
+				return render.App{}, err
+			}
 		}
 	}
 	if m.App.Database {
@@ -619,11 +629,19 @@ func writeIfChanged(path string, want []byte) (bool, error) {
 //
 // 待たない代わりに、reload の成否はここでは分からない。設定の妥当性は
 // ExecReload の 1 段目が検査し、失敗すれば HAProxy の unit 側に残る。
+// containerRunning は名前のコンテナが動いているかを返す。
+func containerRunning(ctx context.Context, r system.Runner, name string) bool {
+	out, err := r.Run(ctx, nil, "podman", "ps", "--format", "{{.Names}}")
+	if err != nil {
+		return false
+	}
+	return slices.Contains(strings.Fields(string(out)), name)
+}
+
 func reloadHAProxy(ctx context.Context, r system.Runner, configPath string) error {
 	// 動いていなければ何もしない。起動は unit が受け持ち、そのときディスク上の
 	// 設定を読むので、ここで送るものは無い。
-	out, err := r.Run(ctx, nil, "podman", "ps", "--format", "{{.Names}}")
-	if err != nil || !slices.Contains(strings.Fields(string(out)), render.HAProxyContainer) {
+	if !containerRunning(ctx, r, render.HAProxyContainer) {
 		return nil
 	}
 	// 先に設定を検査する。壊れた設定のまま USR2 を送ると、マスターは新しい
@@ -809,6 +827,19 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 			continue
 		}
 		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+	}
+
+	// 止まっているのに残っているソケットを消す。
+	//
+	// Unix ソケットのファイルは停止時に消えない。残ったまま起動しようとすると
+	// bind に失敗し、受信部が起動しないまま Tempo だけが動いているという
+	// 分かりにくい状態になる (実際に踏んだ)。
+	//
+	// 動いているときは触らない。動いているものから取り上げることになる。
+	if !containerRunning(ctx, r, "yunirun-tempo") {
+		if err := os.Remove(spec.HostTraceSocket()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
