@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -183,6 +184,92 @@ func TestDatasourcesAreReplacedSoPinningTheUidCannotBreakStartup(t *testing.T) {
 	for _, n := range []string{"Prometheus", "Loki"} {
 		if !strings.Contains(got[del:add], "name: "+n) {
 			t.Fatalf("%s を消していない:\n%s", n, got)
+		}
+	}
+}
+
+// ダッシュボードは JSON として成立していないと Grafana が黙って読み飛ばす。
+func TestDashboardsAreValidJSONWithPanels(t *testing.T) {
+	for name, body := range spec().StackDashboards() {
+		var d struct {
+			UID    string           `json:"uid"`
+			Title  string           `json:"title"`
+			Panels []map[string]any `json:"panels"`
+		}
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			t.Fatalf("%s が JSON になっていない: %v", name, err)
+		}
+		if d.UID == "" || d.Title == "" || len(d.Panels) == 0 {
+			t.Fatalf("%s の中身が足りない: uid=%q title=%q panels=%d", name, d.UID, d.Title, len(d.Panels))
+		}
+	}
+}
+
+// USE は資源の計測が無いと成立しない。node exporter を取り込んでいないと、
+// 板だけあって中身が空になる。
+func TestUseNeedsTheResourceMetricsToBeScraped(t *testing.T) {
+	if !strings.Contains(spec().PrometheusConfig(), "job_name: node") {
+		t.Fatal("ホストの資源を取り込んでいない")
+	}
+	if !strings.Contains(spec().StackUnits()["yunirun-node.container"], "--path.rootfs=/host/root") {
+		t.Fatal("ホスト側の root を見せていない (コンテナ自身の資源を報告してしまう)")
+	}
+}
+
+// exprs はダッシュボードに現れる式をすべて集める。
+//
+// JSON の中では引用符が退避されるので、文字列として探すと取りこぼす。
+func exprs(t *testing.T, body string) string {
+	t.Helper()
+	var d struct {
+		Panels []struct {
+			Targets []struct {
+				Expr string `json:"expr"`
+			} `json:"targets"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, p := range d.Panels {
+		for _, tg := range p.Targets {
+			b.WriteString(tg.Expr)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// RED の 3 つが揃っていること。どれか欠けると方法として成立しない。
+func TestRedCoversRateErrorsDuration(t *testing.T) {
+	got := exprs(t, REDDashboard())
+	for _, want := range []string{
+		"rate(haproxy_backend_http_responses_total[5m])",   // Rate
+		`haproxy_backend_http_responses_total{code="5xx"}`, // Errors
+		"haproxy_backend_response_time_average_seconds",    // Duration
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RED に %s が無い:\n%s", want, got)
+		}
+	}
+}
+
+// USE の 3 つが資源ごとに揃っていること。飽和は PSI で見る。
+func TestUseCoversUtilizationSaturationErrors(t *testing.T) {
+	got := exprs(t, USEDashboard())
+	for _, want := range []string{
+		`node_cpu_seconds_total{mode="idle"}`,        // CPU 使用率
+		"node_pressure_cpu_waiting_seconds_total",    // CPU 飽和
+		"node_memory_MemAvailable_bytes",             // メモリ使用率
+		"node_pressure_memory_waiting_seconds_total", // メモリ飽和
+		"node_disk_io_time_seconds_total",            // ディスク使用率
+		"node_pressure_io_waiting_seconds_total",     // ディスク飽和
+		"node_network_receive_errs_total",            // ネットワーク誤り
+		"node_network_receive_drop_total",            // ネットワーク飽和
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("USE に %s が無い:\n%s", want, got)
 		}
 	}
 }

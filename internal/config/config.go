@@ -190,6 +190,7 @@ type Observability struct {
 	LokiImage       string `json:"lokiImage"`
 	AlloyImage      string `json:"alloyImage"`
 	GrafanaImage    string `json:"grafanaImage"`
+	NodeImage       string `json:"nodeImage"`
 }
 
 func or(v, def string) string {
@@ -210,6 +211,7 @@ func (o Observability) Spec(confDir string) render.StackSpec {
 		LokiImage:       or(o.LokiImage, "docker.io/grafana/loki:3.7.6"),
 		AlloyImage:      or(o.AlloyImage, "docker.io/grafana/alloy:v1.19.0"),
 		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.0"),
+		NodeImage:       or(o.NodeImage, "quay.io/prometheus/node-exporter:v1.12.1"),
 		Retention:       or(o.Retention, "30d"),
 		AlertWebhook:    o.AlertWebhook,
 	}

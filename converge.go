@@ -734,6 +734,18 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 			return err
 		}
 	}
+	// ダッシュボードは別のディレクトリへ。Grafana は「ダッシュボードだけが
+	// 入った場所」を見に行くので、設定ファイルと混ぜると読み込みに失敗する。
+	dashDir := filepath.Join(confDir, "dashboards")
+	if err := os.MkdirAll(dashDir, 0o755); err != nil {
+		return err
+	}
+	for name, body := range spec.StackDashboards() {
+		if err := os.WriteFile(filepath.Join(dashDir, name), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+
 	// データの置き場所。中身は :U で各コンテナのユーザへ渡る。
 	for _, d := range []string{"prometheus", "loki", "alloy", "grafana"} {
 		if err := os.MkdirAll(filepath.Join(spec.Dir, d), 0o755); err != nil {
