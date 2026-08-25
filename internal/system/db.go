@@ -93,10 +93,21 @@ func EnsureDatabase(ctx context.Context, r Runner, c Conn, n DBNames, appPasswor
 	// 問い合わせごとの所要時間を残す。これが無いと「アプリが遅い」までしか
 	// 分からず、SQL なのかアプリのコードなのかを切り分けられない。
 	//
-	// データベースごとに要る。共有メモリ側の読み込みは unit 側で指定してある。
-	if _, err := runPsql(ctx, r, c, n.Database,
+	// アプリの DB には作らない。あちらは pgschema が宣言どおりに保つので、
+	// 宣言に無いものを消そうとする。拡張が持つビューは直接消せないため、
+	// 適用そのものが失敗する (実際に踏んだ)。
+	//
+	// 収集は共有メモリ側が行い、ビューはどの DB から見ても全体が見える。
+	// 管理用の postgres データベースに 1 つあれば足りる。
+	if _, err := runPsql(ctx, r, c, "postgres",
 		"CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"); err != nil {
-		return fmt.Errorf("%s の pg_stat_statements を用意できません: %w", n.Database, err)
+		return fmt.Errorf("pg_stat_statements を用意できません: %w", err)
+	}
+	// 以前アプリの DB に作っていたぶんを片付ける。残すと pgschema が
+	// 消そうとして失敗し続ける。
+	if _, err := runPsql(ctx, r, c, n.Database,
+		"DROP EXTENSION IF EXISTS pg_stat_statements;"); err != nil {
+		return fmt.Errorf("%s の pg_stat_statements を片付けられません: %w", n.Database, err)
 	}
 	return nil
 }
