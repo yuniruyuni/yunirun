@@ -302,15 +302,23 @@ pkgs.testers.runNixOSTest {
         # これが無いと「アプリが遅い」までしか分からず、SQL なのかアプリの
         # コードなのかを切り分けられない。共有メモリに載せる必要があるので、
         # 起動時に読み込ませていないと拡張を作る時点で失敗する。
+        # 管理用の postgres 側に置く。アプリの DB に作ると、pgschema が宣言に
+        # 無いものとして消そうとし、拡張が持つビューは直接消せないので適用が
+        # 失敗する (実際に踏んだ)。
+        machine.succeed(
+            f"{OWNER} -d postgres -tAc"
+            " \"select count(*) from pg_extension where extname='pg_stat_statements'\""
+            " | grep -qx 1"
+        )
         machine.succeed(
             f"{OWNER} -d beta -tAc"
             " \"select count(*) from pg_extension where extname='pg_stat_statements'\""
-            " | grep -qx 1"
+            " | grep -qx 0"
         )
         # 実際に記録されていること。拡張があっても読み込まれていなければ
         # 問い合わせの時点で落ちる。
         machine.succeed(
-            f"{OWNER} -d beta -tAc 'select 1 from pg_stat_statements limit 1' >/dev/null"
+            f"{OWNER} -d postgres -tAc 'select 1 from pg_stat_statements limit 1' >/dev/null"
         )
 
     with subtest("秘密は管理者鍵でも復号できる"):
