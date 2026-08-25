@@ -323,11 +323,17 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		// 足したときはユーザの systemd インスタンスを入れ直す。補助グループは
 		// プロセスの起動時に決まるので、動き続けているインスタンスは新しい
 		// 所属を持たず、配下のコンテナも持てない。
-		added, err := system.AddToGroup(ctx, r, user, render.TraceGroup)
+		if _, err := system.AddToGroup(ctx, r, user, render.TraceGroup); err != nil {
+			return render.App{}, err
+		}
+		// 足したかどうかではなく、動いているものが実際に持っているかを見る。
+		// 「足したときだけ」にすると、設定を足した後の収束で「もう足してある」
+		// と判定され、動いているプロセスは古い所属のまま残る。
+		gid, err := system.GroupGID(render.TraceGroup)
 		if err != nil {
 			return render.App{}, err
 		}
-		if added {
+		if !system.UserInstanceHasGroup(ctx, r, a.UID, gid) {
 			if err := system.RestartUserInstance(ctx, r, a.UID); err != nil {
 				return render.App{}, err
 			}

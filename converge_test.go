@@ -268,11 +268,13 @@ func TestAddingAGroupRestartsTheUserInstance(t *testing.T) {
 		t.Fatal("グループへの追加が無い")
 	}
 	rest := s[i:]
-	if j := strings.Index(rest, "RestartUserInstance"); j < 0 || j > 400 {
-		t.Fatal("グループを足した直後にユーザのインスタンスを入れ直していない")
+	if j := strings.Index(rest, "RestartUserInstance"); j < 0 || j > 700 {
+		t.Fatal("グループを足した後にユーザのインスタンスを入れ直していない")
 	}
-	if !strings.Contains(rest[:400], "if added {") {
-		t.Fatal("足したときだけ入れ直す形になっていない (毎回落ちる)")
+	// 「足したときだけ」にすると、既にずれている状態から抜け出せない。
+	// 実際に踏んだ: post 以外の 6 アプリが古い所属のまま残った。
+	if !strings.Contains(rest[:700], "UserInstanceHasGroup") {
+		t.Fatal("実際に持っているかを見ていない (既存のずれから抜け出せない)")
 	}
 }
 
