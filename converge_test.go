@@ -248,3 +248,55 @@ func useTempRuntimeDir(t *testing.T) {
 	runtimeDir = t.TempDir()
 	t.Cleanup(func() { runtimeDir = old })
 }
+
+// 補助グループはプロセスの起動時に決まる。動き続けているユーザの systemd
+// インスタンスは新しい所属を持たず、配下のコンテナも持てない。
+//
+// 実際に踏んだ: グループを足したのに keep-groups が効かず、コンテナの中では
+// 65534(nobody) に見えていた。保つべき所属が最初から無かった。
+// マネージャは 3 日前から動いており Groups は 6004 だけだった。
+func TestAddingAGroupRestartsTheUserInstance(t *testing.T) {
+	// 入れ直しの呼び出しが AddToGroup の結果に紐づいていること。
+	// 無条件に入れ直すと収束のたびに全コンテナが落ちる。
+	src, err := os.ReadFile("converge.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	i := strings.Index(s, "system.AddToGroup(ctx, r, user, render.TraceGroup)")
+	if i < 0 {
+		t.Fatal("グループへの追加が無い")
+	}
+	rest := s[i:]
+	if j := strings.Index(rest, "RestartUserInstance"); j < 0 || j > 400 {
+		t.Fatal("グループを足した直後にユーザのインスタンスを入れ直していない")
+	}
+	if !strings.Contains(rest[:400], "if added {") {
+		t.Fatal("足したときだけ入れ直す形になっていない (毎回落ちる)")
+	}
+}
+
+// Unix ソケットのファイルは停止時に消えない。残ったまま起動すると bind に
+// 失敗し、受信部が起動しないまま Tempo だけが動く。実際に踏んだ。
+func TestStaleTraceSocketIsRemovedOnlyWhenTempoIsNotRunning(t *testing.T) {
+	src, err := os.ReadFile("converge.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	i := strings.Index(s, "os.Remove(spec.HostTraceSocket())")
+	if i < 0 {
+		t.Fatal("残ったソケットを消していない")
+	}
+	// 動いているものから取り上げない。
+	if !strings.Contains(s[max(0, i-200):i], "!containerRunning(") {
+		t.Fatal("動いていても消す形になっている")
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
