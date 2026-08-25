@@ -24,6 +24,7 @@ const (
 	PrometheusPort = 8091
 	LokiPort       = 8092
 	AlloyPort      = 8093
+	NodePort       = 8094
 )
 
 // StackSpec は計測基盤を組み立てるのに要るもの。
@@ -37,6 +38,7 @@ type StackSpec struct {
 	LokiImage       string
 	AlloyImage      string
 	GrafanaImage    string
+	NodeImage       string
 
 	// Retention は保持期間。metrics と logs の両方に使う。
 	Retention string
@@ -67,6 +69,10 @@ func (s StackSpec) PrometheusConfig() string {
 	p("  - job_name: haproxy")
 	p("    static_configs:")
 	p("      - targets: ['127.0.0.1:%d']", MetricsPort)
+	// ホストの資源。USE (使用率・飽和・誤り) はここからしか取れない。
+	p("  - job_name: node")
+	p("    static_configs:")
+	p("      - targets: ['127.0.0.1:%d']", NodePort)
 	// 自分自身も見る。取り込みが止まっていることに気付けるようにする。
 	p("  - job_name: prometheus")
 	p("    static_configs:")
@@ -247,6 +253,8 @@ func (s StackSpec) StackUnits() map[string]string {
 	grafana := []string{
 		fmt.Sprintf("Volume=%s/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/yunirun.yaml:ro", s.ConfDir),
 		fmt.Sprintf("Volume=%s/grafana-alerting.yaml:/etc/grafana/provisioning/alerting/rules.yaml:ro", s.ConfDir),
+		fmt.Sprintf("Volume=%s/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/yunirun.yaml:ro", s.ConfDir),
+		fmt.Sprintf("Volume=%s/dashboards:/etc/grafana/provisioning/dashboards/yunirun:ro", s.ConfDir),
 	}
 	if s.AlertWebhook != "" {
 		grafana = append(grafana,
@@ -296,9 +304,51 @@ func (s StackSpec) StackUnits() map[string]string {
 				fmt.Sprintf("Exec=run /etc/alloy/config.alloy --storage.path=/var/lib/alloy --server.http.listen-addr=127.0.0.1:%d", AlloyPort),
 			}),
 
+		"yunirun-node.container": stackUnit(
+			"yunirun-node", "node exporter (ホストの資源)", s.NodeImage, []string{
+				// ホスト側の /proc /sys /  を見せる。これが無いとコンテナ自身の
+				// 資源を報告してしまい、ホストの使用率にならない。
+				"Volume=/proc:/host/proc:ro",
+				"Volume=/sys:/host/sys:ro",
+				"Volume=/:/host/root:ro,rslave",
+				fmt.Sprintf("Exec=--path.procfs=/host/proc --path.sysfs=/host/sys --path.rootfs=/host/root --web.listen-address=127.0.0.1:%d", NodePort),
+			}),
+
 		"yunirun-grafana.container": stackUnit(
 			"yunirun-grafana", "Grafana", s.GrafanaImage, grafana),
 	}
+}
+
+// StackDashboards はダッシュボードを名前つきで返す。
+//
+// 設定ファイルとは別に返すのは、Grafana が「ダッシュボードだけが入った
+// ディレクトリ」を見に行く作りだから。設定ファイルと同じ場所に置くと、
+// 設定ファイルまでダッシュボードとして読もうとして失敗する。
+func (s StackSpec) StackDashboards() map[string]string {
+	return map[string]string{
+		"red.json": REDDashboard(),
+		"use.json": USEDashboard(),
+	}
+}
+
+// GrafanaDashboardProvider はダッシュボードの置き場所を教える設定。
+func (s StackSpec) GrafanaDashboardProvider() string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+	p("apiVersion: 1")
+	p("providers:")
+	p("  - name: yunirun")
+	p("    orgId: 1")
+	p("    folder: yunirun")
+	p("    type: file")
+	// UI で編集させない。宣言から作っているので、編集しても次の収束で戻る。
+	p("    allowUiUpdates: false")
+	p("    disableDeletion: false")
+	p("    updateIntervalSeconds: 30")
+	p("    options:")
+	p("      path: /etc/grafana/provisioning/dashboards/yunirun")
+	p("      foldersFromFilesStructure: false")
+	return b.String()
 }
 
 // StackFiles は生成する設定ファイルを名前つきで返す。
@@ -309,6 +359,7 @@ func (s StackSpec) StackFiles() map[string]string {
 		"alloy.alloy":              s.AlloyConfig(),
 		"grafana-datasources.yaml": s.GrafanaDatasources(),
 		"grafana-alerting.yaml":    s.GrafanaAlerting(),
+		"grafana-dashboards.yaml":  s.GrafanaDashboardProvider(),
 	}
 	// 送り先が無いときは書かない。空の url を入れると Grafana が起動時に
 	// 設定の取り込みごと失敗する。

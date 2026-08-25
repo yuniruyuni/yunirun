@@ -155,7 +155,18 @@ ssh -N -L 8090:127.0.0.1:8090 yuniruyuni.net
 # http://127.0.0.1:8090 を開く
 ```
 
-Grafana には Prometheus と Loki が最初から繋いである。
+Grafana には Prometheus と Loki が最初から繋いであり、板も 2 枚入っている。
+
+| 板 | 中身 |
+|---|---|
+| **RED — アプリの応答** | 流量・失敗・所要時間をアプリごとに。出どころは HAProxy |
+| **USE — ホストの資源** | CPU・メモリ・ディスク・ネットワークの使用率と飽和と誤り |
+
+飽和には PSI (`/proc/pressure`) を使う。使用率に余裕があっても待たされている
+ことがあり、平均だけでは掴めないため。
+
+所要時間はパーセンタイルを出せない。exporter が持っているのは直近 1024 件の
+平均と最大だけで、時間窓の分布ではない。健康確認は要求数に数えられない。
 
 - **どの系が落ちているか**: `haproxy_server_status{state="UP"}`
 - **応答数と失敗数 (RED の R と E)**: `haproxy_backend_http_responses_total`
