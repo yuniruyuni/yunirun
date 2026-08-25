@@ -398,3 +398,15 @@ func TestEveryDataVolumeTheUnitsMountIsListedForCreation(t *testing.T) {
 		}
 	}
 }
+
+// 置き場所をグループで守るので、作る側 (Tempo) も入れないとソケットを
+// 作れない。実際に踏んだ: ディレクトリが root:yunirun-trace 2770 で、
+// Tempo は uid 10001。所属していないので書けなかった。
+func TestTempoIsInTheGroupThatGuardsItsOwnSocket(t *testing.T) {
+	s := spec()
+	s.TraceGID = 983
+	u := s.StackUnits()["yunirun-tempo.container"]
+	if !strings.Contains(u, "GroupAdd=983") {
+		t.Fatalf("グループに入れていない:\n%s", u)
+	}
+}

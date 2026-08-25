@@ -145,6 +145,15 @@ func EnsureSharedGroup(ctx context.Context, r Runner, name string) error {
 	return nil
 }
 
+// GroupGID は名前から gid を引く。
+func GroupGID(name string) (int, error) {
+	g, err := user.LookupGroup(name)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(g.Gid)
+}
+
 // AddToGroup はユーザを補助グループへ入れる。
 //
 // 既に入っていれば何もしない。無条件に usermod を呼ぶと、linger でプロセスが
