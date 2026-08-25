@@ -298,6 +298,21 @@ pkgs.testers.runNixOSTest {
         # 後片付け。以降の subtest のために /run を戻す。
         converge(machine)
 
+    with subtest("問い合わせごとの所要時間が残る"):
+        # これが無いと「アプリが遅い」までしか分からず、SQL なのかアプリの
+        # コードなのかを切り分けられない。共有メモリに載せる必要があるので、
+        # 起動時に読み込ませていないと拡張を作る時点で失敗する。
+        machine.succeed(
+            f"{OWNER} -d beta -tAc"
+            " \"select count(*) from pg_extension where extname='pg_stat_statements'\""
+            " | grep -qx 1"
+        )
+        # 実際に記録されていること。拡張があっても読み込まれていなければ
+        # 問い合わせの時点で落ちる。
+        machine.succeed(
+            f"{OWNER} -d beta -tAc 'select 1 from pg_stat_statements limit 1' >/dev/null"
+        )
+
     with subtest("秘密は管理者鍵でも復号できる"):
         # ホストを失ったときの復旧経路。これが無いと DB へ入れなくなる。
         machine.succeed("test -f /var/lib/yunirun/secrets/beta/beta-db-owner.age")

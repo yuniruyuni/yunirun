@@ -90,6 +90,14 @@ func EnsureDatabase(ctx context.Context, r Runner, c Conn, n DBNames, appPasswor
 	if _, err := runPsql(ctx, r, c, n.Database, GrantSQL(n)); err != nil {
 		return fmt.Errorf("%s の権限付与に失敗しました: %w", n.Database, err)
 	}
+	// 問い合わせごとの所要時間を残す。これが無いと「アプリが遅い」までしか
+	// 分からず、SQL なのかアプリのコードなのかを切り分けられない。
+	//
+	// データベースごとに要る。共有メモリ側の読み込みは unit 側で指定してある。
+	if _, err := runPsql(ctx, r, c, n.Database,
+		"CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"); err != nil {
+		return fmt.Errorf("%s の pg_stat_statements を用意できません: %w", n.Database, err)
+	}
 	return nil
 }
 

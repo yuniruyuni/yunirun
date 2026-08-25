@@ -703,6 +703,12 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 			"-c", "shared_buffers=32MB",
 			"-c", "max_connections=20",
 			"-c", "autovacuum_max_workers=1",
+			// 問い合わせごとの所要時間を残す。共有メモリに載せる必要が
+			// あるので起動時に読み込ませる (後から有効にはできない)。
+			//
+			// これが無いと「アプリが遅い」までしか分からず、SQL なのか
+			// アプリのコードなのかを切り分けられない。
+			"-c", "shared_preload_libraries=pg_stat_statements",
 		},
 	}
 	ra := render.App{Name: name, User: alloc.User(name), Alloc: a}
