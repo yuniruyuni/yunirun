@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/yuniruyuni/yunirun/internal/manifest"
 )
 
 func spec() StackSpec {
@@ -48,10 +50,17 @@ func TestNothingInTheStackListensOutsideLoopback(t *testing.T) {
 
 // bind mount の元は root 所有で、各 image は別々の非 root ユーザで動く。
 // :U が無いと書き込みが Permission denied になる。
+//
+// トレースの口だけは対象外。あちらはアプリのグループで共有するので、:U で
+// Tempo の uid に付け替えると他が繋げなくなる。
 func TestStackDataVolumesAreChownedToTheContainerUser(t *testing.T) {
+	sock := spec().TraceSocketDir()
 	for name, unit := range spec().StackUnits() {
 		for _, line := range strings.Split(unit, "\n") {
 			if !strings.HasPrefix(line, "Volume=/var/lib/yunirun-obs/") {
+				continue
+			}
+			if strings.HasPrefix(line, "Volume="+sock+":") {
 				continue
 			}
 			if !strings.HasSuffix(line, ":U") {
@@ -307,6 +316,36 @@ func TestEveryStackUnitWatchesTheConfigItIsGiven(t *testing.T) {
 			if !slices.Contains(watched, src) {
 				t.Fatalf("%s は %s を渡しているのに見張っていない", name, src)
 			}
+		}
+	}
+}
+
+// トレースの口には認証が無い。誰でも繋げると偽のスパンを流し込める。
+// DB のソケットは誰でも繋げるが、あちらは PostgreSQL がパスワードで認証する。
+func TestTraceSocketIsSharedByGroupNotByEveryone(t *testing.T) {
+	u := spec().StackUnits()["yunirun-tempo.container"]
+	if strings.Contains(u, spec().TraceSocketDir()+":"+"/run/tempo:U") {
+		t.Fatal("ソケット領域を Tempo の uid に付け替えている (他が繋げなくなる)")
+	}
+	if TraceGroup == "" {
+		t.Fatal("共有するグループが決まっていない")
+	}
+}
+
+// ユーザ名前空間の中では補助グループがそのまま見えない。keep-groups が無いと
+// グループで守ったソケットに繋げない (実測で確認済み)。
+func TestAppsKeepTheirHostGroupsSoTheyCanReachTheSocket(t *testing.T) {
+	a := App{Name: "post", TraceSockDir: "/var/lib/yunirun-obs/tempo-sock", Manifest: &manifest.Manifest{}}
+	got := ContainerUnit(a, "blue")
+	for _, want := range []string{
+		"GroupAdd=keep-groups",
+		"Environment=OTEL_EXPORTER_OTLP_ENDPOINT=unix:///run/tempo/otlp.sock",
+		// 指定しないと gRPC が TLS を試みて WRONG_VERSION_NUMBER で落ちる。
+		"Environment=OTEL_EXPORTER_OTLP_INSECURE=true",
+		"Environment=OTEL_SERVICE_NAME=post",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%s が無い:\n%s", want, got)
 		}
 	}
 }

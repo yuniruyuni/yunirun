@@ -6,6 +6,7 @@ package render
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -38,6 +39,8 @@ type App struct {
 	// DBName と DBUser はアプリ本体が使う DB とロール。
 	DBName string
 	DBUser string
+	// TraceSockDir はトレースの口があるホスト側の場所。空なら渡さない。
+	TraceSockDir string
 	// SockDir はこのアプリ専用 PostgreSQL のソケットがある場所。
 	// コンテナにはここだけを見せるので、他アプリの DB へは到達しようがない。
 	SockDir string
@@ -92,6 +95,21 @@ func ContainerUnit(a App, color string) string {
 		p("Environment=PGPORT=5432")
 		p("Environment=DB_USER=%s", a.DBUser)
 		p("Environment=DB_NAME=%s", a.DBName)
+	}
+
+	if a.TraceSockDir != "" {
+		// トレースも DB と同じくソケットで渡す。コンテナはホストの loopback
+		// へ到達できないため、TCP では届かない (実測で確認済み)。
+		p("Volume=%s:%s", a.TraceSockDir, filepath.Dir(TempoSocketPath))
+		// ソケットはグループで守ってある。ユーザ名前空間の中では補助グループが
+		// そのまま見えないので、keep-groups でホスト側の所属を保たせる。
+		// これが無いと権限で弾かれる (実測で確認済み)。
+		p("GroupAdd=keep-groups")
+		p("Environment=OTEL_EXPORTER_OTLP_ENDPOINT=unix://%s", TempoSocketPath)
+		// 平文で話す。指定しないと gRPC が TLS を試み、WRONG_VERSION_NUMBER で
+		// 失敗する (実測で確認済み)。
+		p("Environment=OTEL_EXPORTER_OTLP_INSECURE=true")
+		p("Environment=OTEL_SERVICE_NAME=%s", a.Name)
 	}
 
 	if a.EnvFile != "" {

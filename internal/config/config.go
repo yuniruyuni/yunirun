@@ -191,6 +191,7 @@ type Observability struct {
 	AlloyImage      string `json:"alloyImage"`
 	GrafanaImage    string `json:"grafanaImage"`
 	NodeImage       string `json:"nodeImage"`
+	TempoImage      string `json:"tempoImage"`
 }
 
 func or(v, def string) string {
@@ -198,6 +199,13 @@ func or(v, def string) string {
 		return v
 	}
 	return def
+}
+
+// TraceSocketDir はトレースの口の置き場所を返す。
+//
+// 設定ファイルの位置に依らないので、Spec を組まずに引けるようにしてある。
+func (o Observability) TraceSocketDir() string {
+	return o.Spec("").TraceSocketDir()
 }
 
 // Spec は既定値を埋めた組み立て指示を返す。
@@ -212,6 +220,7 @@ func (o Observability) Spec(confDir string) render.StackSpec {
 		AlloyImage:      or(o.AlloyImage, "docker.io/grafana/alloy:v1.19.0"),
 		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.0"),
 		NodeImage:       or(o.NodeImage, "quay.io/prometheus/node-exporter:v1.12.1"),
+		TempoImage:      or(o.TempoImage, "docker.io/grafana/tempo:3.0.0"),
 		Retention:       or(o.Retention, "30d"),
 		AlertWebhook:    o.AlertWebhook,
 	}

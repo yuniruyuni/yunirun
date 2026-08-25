@@ -26,6 +26,7 @@ const (
 	LokiPort       = 8092
 	AlloyPort      = 8093
 	NodePort       = 8094
+	TempoPort      = 8095
 )
 
 // StackSpec は計測基盤を組み立てるのに要るもの。
@@ -40,6 +41,7 @@ type StackSpec struct {
 	AlloyImage      string
 	GrafanaImage    string
 	NodeImage       string
+	TempoImage      string
 
 	// Retention は保持期間。metrics と logs の両方に使う。
 	Retention string
@@ -54,6 +56,7 @@ type StackSpec struct {
 const (
 	PrometheusUID = "yunirun-prometheus"
 	LokiUID       = "yunirun-loki"
+	TempoUID      = "yunirun-tempo"
 )
 
 // PrometheusConfig は取り込み対象を書き出す。
@@ -80,6 +83,71 @@ func (s StackSpec) PrometheusConfig() string {
 	p("      - targets: ['127.0.0.1:%d']", PrometheusPort)
 	return b.String()
 }
+
+// TraceGroup はトレースの口へ繋げるユーザのグループ名。
+//
+// ソケットに認証が無いので、繋げる相手を絞る必要がある。DB のソケットは
+// 誰でも繋げるが、あちらは PostgreSQL がパスワードで認証するので成立する。
+// こちらは繋げた時点で偽のスパンを流し込めてしまう。
+const TraceGroup = "yunirun-trace"
+
+// TempoConfig は単体構成の Tempo 設定を書き出す。
+func (s StackSpec) TempoConfig() string {
+	var b strings.Builder
+	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
+	p("server:")
+	p("  http_listen_address: 127.0.0.1")
+	p("  http_listen_port: %d", TempoPort)
+	// grpc も 127.0.0.1 に絞る。既定は全アドレスで、ホストのネットワークを
+	// 使う以上そのままだと公開 IP でも待ち受けることになる。
+	p("  grpc_listen_address: 127.0.0.1")
+	p("  grpc_listen_port: 9095")
+	p("distributor:")
+	p("  receivers:")
+	p("    otlp:")
+	p("      protocols:")
+	p("        grpc:")
+	// TCP ではなく Unix ソケットで受ける。コンテナは独立した netns に居て
+	// ホストの loopback へ到達できないので (実測で確認済み)、DB と同じく
+	// ソケットを渡す。TCP にすると公開 IP でも待ち受けることになる。
+	p("          endpoint: %s", TempoSocketPath)
+	p("          transport: unix")
+	p("storage:")
+	p("  trace:")
+	p("    backend: local")
+	p("    local:")
+	p("      path: /var/tempo/blocks")
+	p("    wal:")
+	p("      path: /var/tempo/wal")
+	// 仕事が無いときに走り仕事を探して失敗し続けるので、間隔を空ける。
+	// 既定 (最大 1 分) だと空のうちは毎分エラーが出る。
+	p("backend_worker:")
+	p("  backoff:")
+	p("    min_period: 30s")
+	p("    max_period: 30m")
+	// 外へ送らない。
+	p("usage_report:")
+	p("  reporting_enabled: false")
+	return b.String()
+}
+
+// TraceSocketDir はホスト側のソケットの置き場所。
+//
+// データとは分ける。データは :U でコンテナのユーザへ渡すが、こちらは
+// アプリのグループで共有するので所有者の扱いが違う。
+func (s StackSpec) TraceSocketDir() string {
+	return filepath.Join(s.Dir, "tempo-sock")
+}
+
+// HostTraceSocket はホスト側から見たソケットの位置。
+func (s StackSpec) HostTraceSocket() string {
+	return filepath.Join(s.TraceSocketDir(), filepath.Base(TempoSocketPath))
+}
+
+// TempoSocketPath はコンテナの中から見たソケットの位置。
+//
+// Tempo にもアプリにも同じ場所で見せる。片方だけ変えると繋がらない。
+const TempoSocketPath = "/run/tempo/otlp.sock"
 
 // LokiConfig は単体構成の Loki 設定を書き出す。
 //
@@ -201,7 +269,14 @@ func (s StackSpec) GrafanaDatasources() string {
 	p("deleteDatasources:")
 	p("  - name: Prometheus")
 	p("    orgId: 1")
+	p("  - name: Tempo")
+	p("    uid: %s", TempoUID)
+	p("    type: tempo")
+	p("    access: proxy")
+	p("    url: http://127.0.0.1:%d", TempoPort)
 	p("  - name: Loki")
+	p("    orgId: 1")
+	p("  - name: Tempo")
 	p("    orgId: 1")
 	p("datasources:")
 	p("  - name: Prometheus")
@@ -210,6 +285,11 @@ func (s StackSpec) GrafanaDatasources() string {
 	p("    access: proxy")
 	p("    url: http://127.0.0.1:%d", PrometheusPort)
 	p("    isDefault: true")
+	p("  - name: Tempo")
+	p("    uid: %s", TempoUID)
+	p("    type: tempo")
+	p("    access: proxy")
+	p("    url: http://127.0.0.1:%d", TempoPort)
 	p("  - name: Loki")
 	p("    uid: %s", LokiUID)
 	p("    type: loki")
@@ -315,6 +395,16 @@ func (s StackSpec) StackUnits() map[string]string {
 				fmt.Sprintf("Exec=--path.procfs=/host/proc --path.sysfs=/host/sys --path.rootfs=/host/root --web.listen-address=127.0.0.1:%d", NodePort),
 			}),
 
+		"yunirun-tempo.container": stackUnit(
+			"yunirun-tempo", "Tempo (トレース)", s.TempoImage, []string{
+				fmt.Sprintf("Volume=%s/tempo.yaml:/etc/tempo.yaml:ro", s.ConfDir),
+				fmt.Sprintf("Volume=%s/tempo:/var/tempo:U", s.Dir),
+				// アプリはここへ送る。TCP を使わないのは、コンテナが
+				// ホストの loopback へ到達できないため (実測で確認済み)。
+				fmt.Sprintf("Volume=%s:%s", s.TraceSocketDir(), filepath.Dir(TempoSocketPath)),
+				"Exec=-config.file=/etc/tempo.yaml",
+			}),
+
 		"yunirun-grafana.container": stackUnit(
 			"yunirun-grafana", "Grafana", s.GrafanaImage, grafana),
 	}
@@ -332,6 +422,7 @@ func (s StackSpec) StackInputs(confDir string) map[string][]string {
 		"yunirun-loki.container":       {j("loki.yaml")},
 		"yunirun-alloy.container":      {j("alloy.alloy")},
 		"yunirun-node.container":       nil,
+		"yunirun-tempo.container":      {j("tempo.yaml")},
 		"yunirun-grafana.container": {
 			j("grafana-datasources.yaml"), j("grafana-alerting.yaml"),
 			j("grafana-contactpoints.yaml"), j("grafana-dashboards.yaml"),
@@ -381,6 +472,7 @@ func (s StackSpec) StackFiles() map[string]string {
 		"grafana-datasources.yaml": s.GrafanaDatasources(),
 		"grafana-alerting.yaml":    s.GrafanaAlerting(),
 		"grafana-dashboards.yaml":  s.GrafanaDashboardProvider(),
+		"tempo.yaml":               s.TempoConfig(),
 	}
 	// 送り先が無いときは書かない。空の url を入れると Grafana が起動時に
 	// 設定の取り込みごと失敗する。

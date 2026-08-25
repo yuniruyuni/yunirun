@@ -162,6 +162,23 @@ Grafana には Prometheus と Loki が最初から繋いであり、板も 2 枚
 | **RED — アプリの応答** | 流量・失敗・所要時間をアプリごとに。出どころは HAProxy |
 | **USE — ホストの資源** | CPU・メモリ・ディスク・ネットワークの使用率と飽和と誤り |
 
+トレースは Tempo が受ける。アプリからは **Unix ソケット**で渡す。コンテナは
+独立した netns に居てホストの loopback へ到達できないため、TCP では届かない。
+DB と同じ方式。
+
+ソケットには認証が無いので、繋げる相手を `yunirun-trace` グループで絞る
+(DB のソケットは誰でも繋げるが、あちらは PostgreSQL がパスワードで認証する)。
+ユーザ名前空間の中では補助グループがそのまま見えないので、アプリのコンテナには
+`GroupAdd=keep-groups` を付ける。
+
+アプリ側は環境変数だけで済む。
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT=unix:///run/tempo/otlp.sock
+OTEL_EXPORTER_OTLP_INSECURE=true
+OTEL_SERVICE_NAME=<app>
+```
+
 飽和には PSI (`/proc/pressure`) を使う。使用率に余裕があっても待たされている
 ことがあり、平均だけでは掴めないため。
 

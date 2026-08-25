@@ -303,6 +303,16 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		Manifest: m,
 		LocalTag: "localhost/" + name + ":current",
 	}
+
+	// 計測基盤を立てているときだけトレースの口を渡す。無いのに渡すと、
+	// 存在しない場所を mount しようとして unit が起動できなくなる。
+	if cfg.Observability.Enable {
+		ra.TraceSockDir = cfg.Observability.TraceSocketDir()
+		// ソケットはグループで守ってある。所属していないと繋げない。
+		if err := system.AddToGroup(ctx, r, user, render.TraceGroup); err != nil {
+			return render.App{}, err
+		}
+	}
 	if m.App.Database {
 		ra.DBName = names.Database
 		ra.DBUser = names.App
@@ -750,6 +760,25 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 			return err
 		}
 	}
+	// トレースの口を先に用意する。ソケットに認証が無いので、繋げる相手を
+	// グループで絞る。DB のソケットは誰でも繋げるが、あちらは PostgreSQL が
+	// パスワードで認証するので成立する。こちらは繋げた時点で偽のスパンを
+	// 流し込めてしまう。
+	if err := system.EnsureSharedGroup(ctx, r, render.TraceGroup); err != nil {
+		return err
+	}
+	// setgid を付ける。Tempo が作るソケットにこのグループを継がせるため。
+	sockDir := spec.TraceSocketDir()
+	if err := os.MkdirAll(sockDir, 0o2770); err != nil {
+		return err
+	}
+	if err := system.Chgrp(sockDir, render.TraceGroup); err != nil {
+		return err
+	}
+	if err := os.Chmod(sockDir, os.ModeSetgid|0o770); err != nil {
+		return err
+	}
+
 	// ダッシュボードは別のディレクトリへ。Grafana は「ダッシュボードだけが
 	// 入った場所」を見に行くので、設定ファイルと混ぜると読み込みに失敗する。
 	dashDir := filepath.Join(confDir, "dashboards")
@@ -784,6 +813,12 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 		if err := system.ApplySystemUnit(ctx, r, name, units[name], watch[name]...); err != nil {
 			return err
 		}
+	}
+
+	// ソケットは Tempo が作る。umask の都合で srwxr-xr-x になるので、
+	// グループで書けるように直す。生成を待たないと空振りする。
+	if err := system.ChmodWhenExists(spec.HostTraceSocket(), 0o660, 30); err != nil {
+		return fmt.Errorf("トレースの口を用意できません: %w", err)
 	}
 	return nil
 }
