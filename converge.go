@@ -77,6 +77,16 @@ func runConverge(ctx context.Context, args []string) error {
 	// スキップしたアプリを HAProxy から外さないのも意図的。外すと現に動いている
 	// コンテナへの経路が切れて停止する。宣言が読めないことと、既に動いている
 	// ものを止めてよいことは別。
+	// トレースの口を共有するグループは、アプリより先に作る。
+	//
+	// 各アプリのユーザをこのグループへ入れるので、アプリの収束より後に作ると
+	// 「そんなグループは無い」で全アプリが失敗する (実際に踏んだ)。
+	if cfg.Observability.Enable {
+		if err := system.EnsureSharedGroup(ctx, r, render.TraceGroup); err != nil {
+			return err
+		}
+	}
+
 	var apps []render.App
 	var failed []error
 	for _, name := range cfg.Names() {
@@ -760,13 +770,6 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 			return err
 		}
 	}
-	// トレースの口を先に用意する。ソケットに認証が無いので、繋げる相手を
-	// グループで絞る。DB のソケットは誰でも繋げるが、あちらは PostgreSQL が
-	// パスワードで認証するので成立する。こちらは繋げた時点で偽のスパンを
-	// 流し込めてしまう。
-	if err := system.EnsureSharedGroup(ctx, r, render.TraceGroup); err != nil {
-		return err
-	}
 	// setgid を付ける。Tempo が作るソケットにこのグループを継がせるため。
 	sockDir := spec.TraceSocketDir()
 	if err := os.MkdirAll(sockDir, 0o2770); err != nil {
@@ -792,8 +795,13 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 	}
 
 	// データの置き場所。中身は :U で各コンテナのユーザへ渡る。
-	for _, d := range []string{"prometheus", "loki", "alloy", "grafana"} {
-		if err := os.MkdirAll(filepath.Join(spec.Dir, d), 0o755); err != nil {
+	// 一覧は render 側に置いてある。unit の Volume とずれると起動できない。
+	for _, d := range spec.StackDataDirs() {
+		if d == sockDir {
+			// ソケットの置き場所だけは権限が違う。上で作ってある。
+			continue
+		}
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
