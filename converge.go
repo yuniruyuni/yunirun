@@ -759,6 +759,13 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 		return nil
 	}
 	spec := cfg.Observability.Spec(confDir)
+	// Tempo 自身もグループへ入れる。置き場所をグループで守るので、作る側が
+	// 所属していないとソケットを作れない。
+	gid, err := system.GroupGID(render.TraceGroup)
+	if err != nil {
+		return err
+	}
+	spec.TraceGID = gid
 
 	// 世界読み取り可能にする。中に秘密は無く、各コンテナが別々の非 root
 	// ユーザで読むため。

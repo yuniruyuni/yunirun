@@ -43,6 +43,11 @@ type StackSpec struct {
 	NodeImage       string
 	TempoImage      string
 
+	// TraceGID はトレースの口を共有するグループの gid。
+	//
+	// Tempo 自身もここへ入れる必要がある。置き場所をグループで守るので、
+	// 作る側が所属していないとソケットを作れない (実際に踏んだ)。
+	TraceGID int
 	// Retention は保持期間。metrics と logs の両方に使う。
 	Retention string
 
@@ -401,6 +406,10 @@ func (s StackSpec) StackUnits() map[string]string {
 				// アプリはここへ送る。TCP を使わないのは、コンテナが
 				// ホストの loopback へ到達できないため (実測で確認済み)。
 				fmt.Sprintf("Volume=%s:%s", s.TraceSocketDir(), filepath.Dir(TempoSocketPath)),
+				// 置き場所をグループで守っているので、作る側も入れる。
+				// 名前ではなく番号で渡す。コンテナの中に同じ名前の
+				// グループがあるとは限らない。
+				fmt.Sprintf("GroupAdd=%d", s.TraceGID),
 				"Exec=-config.file=/etc/tempo.yaml",
 			}),
 
