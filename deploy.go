@@ -166,6 +166,12 @@ func runStep(ctx context.Context, r system.Runner, step string, c stepCtx) error
 	case step == StepMigrate:
 		return runMigrateStep(ctx, r, c)
 
+	case step == StepPrune:
+		// デプロイの成否とは分ける。掃除ができないことと、デプロイが
+		// 失敗したことは別。
+		PruneAfterDeploy(ctx, r, c.image)
+		return nil
+
 	case strings.Contains(step, StepRestart):
 		color := strings.Fields(step)[0]
 		_, err := r.Run(ctx, nil, "systemctl", "--user", "restart",

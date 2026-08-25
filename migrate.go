@@ -128,6 +128,10 @@ func runMigrate(ctx context.Context, args []string) error {
 	if err := system.VerifyAppGrants(ctx, r, conn, names); err != nil {
 		return err
 	}
+
+	// migration の image も pull するだけで消していなかった。デプロイのたびに
+	// root 側へ 1 つずつ積み上がる。適用が通った後に片付ける。
+	PruneAfterDeploy(ctx, r, image)
 	return nil
 }
 

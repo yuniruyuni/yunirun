@@ -34,6 +34,7 @@ const (
 	StepMigrate       = "schema を適用"
 	StepRestart       = "再起動"
 	StepWaitHealthy   = "healthy を待つ"
+	StepPrune         = "古い image を片付ける"
 )
 
 // PlanSteps はデプロイ手順の並びを返す。
@@ -58,5 +59,8 @@ func PlanSteps(in PlanInput) []string {
 			fmt.Sprintf("%s を%s", c, StepRestart),
 			fmt.Sprintf("%s の%s", c, StepWaitHealthy))
 	}
+	// 最後に片付ける。新しい版が healthy になってからでないと、戻り先を
+	// 消してしまう。
+	steps = append(steps, StepPrune)
 	return steps
 }

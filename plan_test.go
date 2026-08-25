@@ -82,3 +82,27 @@ func TestMigrationIsSkippedWhenNotDeclared(t *testing.T) {
 		}
 	}
 }
+
+// 片付けは最後。新しい版が healthy になる前に消すと、戻り先を失う。
+func TestPruneComesAfterEverythingIsHealthy(t *testing.T) {
+	steps := PlanSteps(PlanInput{
+		App: "post", Tag: "abc", Image: "ghcr.io/x/post",
+		Colors: []string{"blue", "green"}, HasMigrate: true,
+	})
+	prune := -1
+	lastHealthy := -1
+	for i, s := range steps {
+		if s == StepPrune {
+			prune = i
+		}
+		if strings.Contains(s, StepWaitHealthy) {
+			lastHealthy = i
+		}
+	}
+	if prune < 0 {
+		t.Fatalf("片付けが入っていない: %v", steps)
+	}
+	if prune < lastHealthy {
+		t.Fatalf("healthy を待つ前に片付けている: %v", steps)
+	}
+}
