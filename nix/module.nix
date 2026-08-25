@@ -168,6 +168,7 @@ in
           alloyImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
           grafanaImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
           nodeImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
+          tempoImage = lib.mkOption { type = lib.types.str; default = ""; description = "空なら yunirun の既定値。"; };
         };
       };
     };

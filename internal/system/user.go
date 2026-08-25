@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yuniruyuni/yunirun/internal/alloc"
 )
@@ -128,4 +129,73 @@ func appendLineIfMissing(path, line string) error {
 func EnsureLinger(ctx context.Context, r Runner, name string) error {
 	_, err := r.Run(ctx, nil, "loginctl", "enable-linger", name)
 	return err
+}
+
+// EnsureSharedGroup は共有用のグループを作る。gid は指定しない。
+//
+// アプリの割り当てとは別の資源なので、台帳の番号体系には載せない。既にあれば
+// 何もしない。
+func EnsureSharedGroup(ctx context.Context, r Runner, name string) error {
+	if _, err := user.LookupGroup(name); err == nil {
+		return nil
+	}
+	if _, err := r.Run(ctx, nil, "groupadd", "--system", name); err != nil {
+		return fmt.Errorf("グループ %s を作れません: %w", name, err)
+	}
+	return nil
+}
+
+// AddToGroup はユーザを補助グループへ入れる。
+//
+// 既に入っていれば何もしない。無条件に usermod を呼ぶと、linger でプロセスが
+// 動いているユーザに対して失敗することがある。
+func AddToGroup(ctx context.Context, r Runner, userName, group string) error {
+	u, err := user.Lookup(userName)
+	if err != nil {
+		return err
+	}
+	gids, err := u.GroupIds()
+	if err != nil {
+		return err
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return err
+	}
+	for _, id := range gids {
+		if id == g.Gid {
+			return nil
+		}
+	}
+	if _, err := r.Run(ctx, nil, "usermod", "-aG", group, userName); err != nil {
+		return fmt.Errorf("%s を %s に入れられません: %w", userName, group, err)
+	}
+	return nil
+}
+
+// Chgrp は名前でグループを引いて付け替える。
+func Chgrp(path, group string) error {
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return err
+	}
+	return os.Chown(path, -1, gid)
+}
+
+// ChmodWhenExists は現れるのを待ってから権限を付ける。
+//
+// 相手が作るものを待つ。無条件に chmod すると、まだ無いだけなのか作られない
+// のかを区別できない。
+func ChmodWhenExists(path string, mode os.FileMode, tries int) error {
+	for i := 0; i < tries; i++ {
+		if _, err := os.Stat(path); err == nil {
+			return os.Chmod(path, mode)
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("%s が現れません", path)
 }
