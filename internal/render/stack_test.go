@@ -372,3 +372,29 @@ func TestTempoListensOnlyOnLoopback(t *testing.T) {
 		}
 	}
 }
+
+// unit が渡す先はすべて converge が作っていないと、podman が
+// "statfs ...: no such file or directory" で起動できない (実際に踏んだ)。
+//
+// データ領域の一覧と unit の Volume がずれていないことを固定する。
+func TestEveryDataVolumeTheUnitsMountIsListedForCreation(t *testing.T) {
+	s := spec()
+	// converge が作るものと同じ一覧を見る。複製するとずれても気付けない。
+	created := map[string]bool{}
+	for _, d := range s.StackDataDirs() {
+		created[d] = true
+	}
+
+	for name, unit := range s.StackUnits() {
+		for _, line := range strings.Split(unit, "\n") {
+			v, ok := strings.CutPrefix(line, "Volume="+s.Dir+"/")
+			if !ok {
+				continue
+			}
+			src := s.Dir + "/" + strings.SplitN(v, ":", 2)[0]
+			if !created[src] {
+				t.Fatalf("%s が %s を渡しているが、converge が作る一覧に無い", name, src)
+			}
+		}
+	}
+}

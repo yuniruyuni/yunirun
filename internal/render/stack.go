@@ -409,6 +409,19 @@ func (s StackSpec) StackUnits() map[string]string {
 	}
 }
 
+// StackDataDirs は unit へ渡すために作っておく必要がある場所を返す。
+//
+// unit の Volume とこの一覧がずれると、podman が
+// "statfs ...: no such file or directory" で起動できない (実際に踏んだ)。
+// 一覧を 1 か所に置いて、両方がここを見るようにする。
+func (s StackSpec) StackDataDirs() []string {
+	out := []string{s.TraceSocketDir()}
+	for _, d := range []string{"prometheus", "loki", "alloy", "grafana", "tempo"} {
+		out = append(out, filepath.Join(s.Dir, d))
+	}
+	return out
+}
+
 // StackInputs は unit ごとに「中身が変わったら入れ直すべきファイル」を返す。
 //
 // unit の内容が同じでも、渡している設定が変われば動いているものは古い。
