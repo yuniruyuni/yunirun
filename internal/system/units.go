@@ -217,7 +217,7 @@ var SystemUnitDir = "/etc/containers/systemd"
 //
 // 「宣言どおりにする」のが converge の仕事なので、黙って古いまま残すより
 // 短い断を選ぶ。
-func ApplySystemUnit(ctx context.Context, r Runner, name, content string) error {
+func ApplySystemUnit(ctx context.Context, r Runner, name, content string, watch ...string) error {
 	if err := os.MkdirAll(SystemUnitDir, 0o755); err != nil {
 		return err
 	}
@@ -233,7 +233,7 @@ func ApplySystemUnit(ctx context.Context, r Runner, name, content string) error 
 	}
 	svc := strings.TrimSuffix(name, ".container") + ".service"
 	verb := "start"
-	if stale(ctx, r, p, containerName(name, content)) {
+	if stale(ctx, r, append([]string{p}, watch...), containerName(name, content)) {
 		verb = "restart"
 	}
 	if _, err := r.Run(ctx, nil, "systemctl", verb, svc); err != nil {
@@ -255,12 +255,25 @@ func containerName(unit, content string) string {
 	return "systemd-" + base
 }
 
-// stale は動いているコンテナが unit ファイルより古いかを返す。
+// stale は動いているコンテナが、入力のどれかより古いかを返す。
+//
+// 入力は unit ファイルと、そこへ渡している設定ファイル。unit だけを見ると、
+// 中身 (設定) が変わっただけの場合を取りこぼす。実際、Prometheus の
+// 取り込み対象を足したときに unit は変わらず、古い設定のまま動き続けた。
 //
 // 動いていない場合は false。そのときは start が受け持つ。
-func stale(ctx context.Context, r Runner, unitPath, container string) bool {
-	fi, err := os.Stat(unitPath)
-	if err != nil {
+func stale(ctx context.Context, r Runner, inputs []string, container string) bool {
+	newest := int64(0)
+	for _, p := range inputs {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if m := fi.ModTime().Unix(); m > newest {
+			newest = m
+		}
+	}
+	if newest == 0 {
 		return false
 	}
 	out, err := r.Run(ctx, nil, "podman", "inspect", container,
@@ -272,5 +285,5 @@ func stale(ctx context.Context, r Runner, unitPath, container string) bool {
 	if err != nil {
 		return false
 	}
-	return fi.ModTime().Unix() > sec
+	return newest > sec
 }

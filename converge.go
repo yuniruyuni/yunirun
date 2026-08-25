@@ -444,6 +444,11 @@ func writeEnvFile(path string, kv map[string]string, uid, gid int) error {
 	for _, k := range keys {
 		b = append(b, []byte(k+"="+kv[k]+"\n")...)
 	}
+	// 内容が同じなら触らない。書き直すと更新時刻が動き、設定が変わったと
+	// 見なされてコンテナが毎回再起動する。
+	if got, err := os.ReadFile(path); err == nil && bytes.Equal(got, b) {
+		return nil
+	}
 	// 先に 0600 で作ってから所有者を移す。順序を逆にすると、一瞬でも
 	// 意図しない相手が読める窓ができる。
 	if err := os.WriteFile(path, b, 0o600); err != nil {
@@ -701,7 +706,9 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 		},
 	}
 	ra := render.App{Name: name, User: alloc.User(name), Alloc: a}
-	if err := system.ApplySystemUnit(ctx, r, unit, render.DBUnit(ra, spec)); err != nil {
+	// db.env も見張る。パスワードを入れ替えたのにコンテナが古いまま、
+	// という形にならないようにする。
+	if err := system.ApplySystemUnit(ctx, r, unit, render.DBUnit(ra, spec), dbEnv); err != nil {
 		return system.Conn{}, err
 	}
 
@@ -727,10 +734,13 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 	}
 	spec := cfg.Observability.Spec(confDir)
 
+	// 世界読み取り可能にする。中に秘密は無く、各コンテナが別々の非 root
+	// ユーザで読むため。
+	//
+	// 内容が同じなら触らない。書き直すと更新時刻が動き、設定が変わったと
+	// 見なされてコンテナが毎回再起動する。
 	for name, body := range spec.StackFiles() {
-		// 世界読み取り可能にする。中に秘密は無く、各コンテナが別々の
-		// 非 root ユーザで読むため。
-		if err := os.WriteFile(filepath.Join(confDir, name), []byte(body), 0o644); err != nil {
+		if _, err := writeIfChanged(filepath.Join(confDir, name), []byte(body)); err != nil {
 			return err
 		}
 	}
@@ -741,7 +751,7 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 		return err
 	}
 	for name, body := range spec.StackDashboards() {
-		if err := os.WriteFile(filepath.Join(dashDir, name), []byte(body), 0o644); err != nil {
+		if _, err := writeIfChanged(filepath.Join(dashDir, name), []byte(body)); err != nil {
 			return err
 		}
 	}
@@ -760,8 +770,12 @@ func convergeObservability(ctx context.Context, r system.Runner, cfg *config.Con
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	// 設定ファイルも見張る。unit だけを見ると、中身が変わっただけの場合を
+	// 取りこぼす。実際、Prometheus の取り込み対象を足したときに unit は
+	// 変わらず、古い設定のまま動き続けた。
+	watch := spec.StackInputs(confDir)
 	for _, name := range names {
-		if err := system.ApplySystemUnit(ctx, r, name, units[name]); err != nil {
+		if err := system.ApplySystemUnit(ctx, r, name, units[name], watch[name]...); err != nil {
 			return err
 		}
 	}

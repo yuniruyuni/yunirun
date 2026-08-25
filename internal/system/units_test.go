@@ -214,3 +214,35 @@ func (r *okRunner) Run(_ context.Context, _ []byte, name string, args ...string)
 func (r *okRunner) RunEnv(ctx context.Context, stdin []byte, _ []string, name string, args ...string) ([]byte, error) {
 	return r.Run(ctx, stdin, name, args...)
 }
+
+// unit の内容が同じでも、渡している設定が変われば動いているものは古い。
+// 実際、Prometheus の取り込み対象を足したときに unit は変わらず、node exporter を
+// 見に行かないまま「収束した」と報告していた。
+func TestApplySystemUnitCatchesAChangedConfigEvenWhenTheUnitIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	old := SystemUnitDir
+	SystemUnitDir = dir
+	t.Cleanup(func() { SystemUnitDir = old })
+
+	// unit は既にあり内容も同じ。設定ファイルだけがコンテナより新しい。
+	if err := os.WriteFile(filepath.Join(dir, "x.container"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "x.yml")
+	if err := os.WriteFile(cfg, []byte("scrape: node"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// unit だけを見る呼び方では気付かない。
+	r := &okRunner{out: strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)}
+	if err := ApplySystemUnit(t.Context(), r, "x.container", "one"); err != nil {
+		t.Fatal(err)
+	}
+	// 設定も渡せば気付く。
+	r2 := &okRunner{out: strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)}
+	if err := ApplySystemUnit(t.Context(), r2, "x.container", "one", cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(r2.commands, "systemctl restart x.service") {
+		t.Fatalf("設定の変化を取りこぼした: %v", r2.commands)
+	}
+}
