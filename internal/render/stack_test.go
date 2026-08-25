@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -270,6 +271,42 @@ func TestUseCoversUtilizationSaturationErrors(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("USE に %s が無い:\n%s", want, got)
+		}
+	}
+}
+
+// HAProxy は入れ直しの対象にしない。USR2 で読み直せるので、繋ぎっぱなしの
+// 接続を切ってまで入れ直す理由が無い。
+func TestHAProxyIsReloadedNotRestarted(t *testing.T) {
+	in := spec().StackInputs("/etc/yunirun")
+	if _, ok := in["yunirun-haproxy.container"]; ok {
+		t.Fatal("HAProxy を入れ直しの対象にしている")
+	}
+}
+
+// 設定を渡している unit は、その設定を見張っていないと取りこぼす。
+func TestEveryStackUnitWatchesTheConfigItIsGiven(t *testing.T) {
+	s := spec()
+	in := s.StackInputs("/etc/yunirun")
+	for name, unit := range s.StackUnits() {
+		watched, ok := in[name]
+		if !ok {
+			t.Fatalf("%s の見張り対象が定義されていない", name)
+		}
+		for _, line := range strings.Split(unit, "\n") {
+			v, isVol := strings.CutPrefix(line, "Volume=/etc/yunirun/")
+			if !isVol {
+				continue
+			}
+			src := "/etc/yunirun/" + strings.SplitN(v, ":", 2)[0]
+			// ディレクトリを渡しているものは中身が動き続けるので対象外。
+			if !strings.HasSuffix(src, ".yml") && !strings.HasSuffix(src, ".yaml") &&
+				!strings.HasSuffix(src, ".alloy") && !strings.HasSuffix(src, ".cfg") {
+				continue
+			}
+			if !slices.Contains(watched, src) {
+				t.Fatalf("%s は %s を渡しているのに見張っていない", name, src)
+			}
 		}
 	}
 }

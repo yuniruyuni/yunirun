@@ -15,6 +15,7 @@ package render
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -316,6 +317,26 @@ func (s StackSpec) StackUnits() map[string]string {
 
 		"yunirun-grafana.container": stackUnit(
 			"yunirun-grafana", "Grafana", s.GrafanaImage, grafana),
+	}
+}
+
+// StackInputs は unit ごとに「中身が変わったら入れ直すべきファイル」を返す。
+//
+// unit の内容が同じでも、渡している設定が変われば動いているものは古い。
+// HAProxy はここに含めない。あちらは USR2 で読み直せるので、入れ直すより
+// 繋ぎっぱなしの接続を保つ方がよい。
+func (s StackSpec) StackInputs(confDir string) map[string][]string {
+	j := func(n string) string { return filepath.Join(confDir, n) }
+	return map[string][]string{
+		"yunirun-prometheus.container": {j("prometheus.yml")},
+		"yunirun-loki.container":       {j("loki.yaml")},
+		"yunirun-alloy.container":      {j("alloy.alloy")},
+		"yunirun-node.container":       nil,
+		"yunirun-grafana.container": {
+			j("grafana-datasources.yaml"), j("grafana-alerting.yaml"),
+			j("grafana-contactpoints.yaml"), j("grafana-dashboards.yaml"),
+			// 板は Grafana が 30 秒ごとに読み直すので、入れ直さなくてよい。
+		},
 	}
 }
 
