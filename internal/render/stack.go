@@ -119,12 +119,11 @@ func (s StackSpec) TempoConfig() string {
 	p("      path: /var/tempo/blocks")
 	p("    wal:")
 	p("      path: /var/tempo/wal")
-	// 仕事が無いときに走り仕事を探して失敗し続けるので、間隔を空ける。
-	// 既定 (最大 1 分) だと空のうちは毎分エラーが出る。
-	p("backend_worker:")
-	p("  backoff:")
-	p("    min_period: 30s")
-	p("    max_period: 30m")
+	// 単機構成では接続先が空のままになり、Tempo 自身が「推測した」と警告を
+	// 出したうえで問い合わせに失敗し続ける。明示すると出なくなる。
+	p("querier:")
+	p("  frontend_worker:")
+	p("    frontend_address: 127.0.0.1:9095")
 	// 外へ送らない。
 	p("usage_report:")
 	p("  reporting_enabled: false")

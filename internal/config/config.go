@@ -220,9 +220,17 @@ func (o Observability) Spec(confDir string) render.StackSpec {
 		AlloyImage:      or(o.AlloyImage, "docker.io/grafana/alloy:v1.19.0"),
 		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.0"),
 		NodeImage:       or(o.NodeImage, "quay.io/prometheus/node-exporter:v1.12.1"),
-		TempoImage:      or(o.TempoImage, "docker.io/grafana/tempo:3.0.0"),
-		Retention:       or(o.Retention, "30d"),
-		AlertWebhook:    o.AlertWebhook,
+		// 3.x ではなく 2.x の最新を使う。3.0 は ingester を live_store +
+		// block_builder に、compactor を backendscheduler + backendworker に
+		// 置き換えた作り替えで、その backendworker が「走らせる仕事が無い」
+		// たびにエラーを出す。単機で低負荷という使い方では常に空なので鳴り
+		// 続け、設定では消せない (実測で確認済み)。
+		//
+		// 2.10 系は現役で、3.0.3 と同じ日に同じ Go 更新を受けている。
+		// 実測で定常状態のログ増分は 0 行。
+		TempoImage:   or(o.TempoImage, "docker.io/grafana/tempo:2.10.8"),
+		Retention:    or(o.Retention, "30d"),
+		AlertWebhook: o.AlertWebhook,
 	}
 }
 

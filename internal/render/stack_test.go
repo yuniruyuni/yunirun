@@ -349,3 +349,26 @@ func TestAppsKeepTheirHostGroupsSoTheyCanReachTheSocket(t *testing.T) {
 		}
 	}
 }
+
+// 単機構成では接続先が空のままになり、Tempo 自身が「推測した」と警告を出した
+// うえで問い合わせに失敗し続ける。明示すると出なくなる (実測で確認済み)。
+func TestTempoIsToldWhereItsOwnPartsAre(t *testing.T) {
+	got := spec().TempoConfig()
+	if !strings.Contains(got, "frontend_address: 127.0.0.1:9095") {
+		t.Fatalf("接続先を明示していない:\n%s", got)
+	}
+}
+
+// 全アドレスで待ち受けると公開 IP でも受けることになる。ホストの
+// ネットワークを使うので、既定のままだと外へ出てしまう。
+func TestTempoListensOnlyOnLoopback(t *testing.T) {
+	got := spec().TempoConfig()
+	for _, want := range []string{
+		"http_listen_address: 127.0.0.1",
+		"grpc_listen_address: 127.0.0.1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%s が無い:\n%s", want, got)
+		}
+	}
+}
