@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -187,6 +188,40 @@ func AddToGroup(ctx context.Context, r Runner, userName, group string) (bool, er
 		return false, fmt.Errorf("%s を %s に入れられません: %w", userName, group, err)
 	}
 	return true, nil
+}
+
+// UserInstanceHasGroup は動いているユーザの systemd インスタンスが、その
+// グループを実際に持っているかを返す。
+//
+// 「足したかどうか」ではなく「効いているかどうか」を見る。設定を足した後の
+// 収束では「もう足してある」と判定されてしまい、動いているプロセスは古い
+// 所属のまま残る。この形は既に 3 度踏んでいる。
+//
+// 判定できないときは true を返す。分からないことを理由に入れ直すと、
+// 収束のたびに全コンテナが落ちる。
+func UserInstanceHasGroup(ctx context.Context, r Runner, uid, gid int) bool {
+	out, err := r.Run(ctx, nil, "systemctl", "show",
+		fmt.Sprintf("user@%d.service", uid), "-p", "MainPID", "--value")
+	if err != nil {
+		return true
+	}
+	pid := strings.TrimSpace(string(out))
+	if pid == "" || pid == "0" {
+		// 動いていない。次に起動するときは新しい所属で始まる。
+		return true
+	}
+	b, err := os.ReadFile("/proc/" + pid + "/status")
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		rest, ok := strings.CutPrefix(line, "Groups:")
+		if !ok {
+			continue
+		}
+		return slices.Contains(strings.Fields(rest), strconv.Itoa(gid))
+	}
+	return true
 }
 
 // RestartUserInstance はユーザの systemd インスタンスを入れ直す。
