@@ -472,6 +472,23 @@ func TestBackupAlertWatchesAbsenceOfSuccessNotFailure(t *testing.T) {
 	}
 }
 
+// Prometheus は取り込み側のジョブ名で job を上書きする。指標側が job を
+// 名乗っても exported_job へ追いやられるので、job でまとめると全部の
+// バックアップが 1 系列に潰れる。そうなると 1 つが止まっても他の成功が
+// max で拾われて隠れる。実機で job="postgresql" が job="node" に化けた。
+func TestBackupAlertDoesNotGroupByReservedJobLabel(t *testing.T) {
+	r := ruleByUID(t, "yunirun-backup-stale")
+	if strings.Contains(r.Expr, "by (job)") {
+		t.Errorf("job でまとめている (取り込み側に上書きされて 1 系列に潰れる): %s", r.Expr)
+	}
+	if !strings.Contains(r.Expr, "by (backup)") {
+		t.Errorf("バックアップごとに分かれていない: %s", r.Expr)
+	}
+	if strings.Contains(r.Summary, "$labels.job") {
+		t.Errorf("どのバックアップかを job で出そうとしている: %s", r.Summary)
+	}
+}
+
 // 同じ 1 台の装置を複数の場所へ結び付けている場合 (NixOS の /nix/store など)、
 // 場所でまとめると同じ空き容量で二重に鳴る。
 func TestDiskAlertGroupsByDeviceNotMountpoint(t *testing.T) {

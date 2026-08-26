@@ -573,11 +573,17 @@ func alertRules() []alertRule {
 			// 「失敗した」ではなく「成功していない」を見る。失敗を見ると、
 			// そもそも動かなかった場合を取りこぼす。timer が止まっていても
 			// script が消えていても、成功が途絶えれば同じように現れる。
-			Expr: `time() - max by (job) (yunirun_backup_last_success_seconds)`,
+			//
+			// まとめる名前に job は使えない。Prometheus は取り込み側の
+			// ジョブ名で job を上書きするので (指標側の値は exported_job へ
+			// 追いやられる)、全部のバックアップが 1 系列に潰れる。そうなると
+			// 1 つが止まっても他の成功が max で拾われて隠れる。実機で
+			// job="postgresql" が job="node" に化けることを確認した。
+			Expr: `time() - max by (backup) (yunirun_backup_last_success_seconds)`,
 			// 1 日 1 回の想定に対して 36 時間。1 回の失敗では鳴らさず、
 			// 2 回続けて取れていない状態を捉える。
 			Op: "gt", Threshold: "129600", For: "10m", Severity: "critical",
-			Summary: "{{ $labels.job }} のバックアップが 36 時間以上成功していない",
+			Summary: "{{ $labels.backup }} のバックアップが 36 時間以上成功していない",
 			// 指標そのものが消えるのも「取れていない」の一種。黙らせない。
 			NoData: "Alerting",
 		},
