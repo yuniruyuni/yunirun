@@ -723,7 +723,7 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 	conn := system.Conn{SocketDir: sockDir, Owner: n.Owner, Password: ownerPassword}
 	// 初回は initdb が走るぶん時間がかかる。待たずに続けると、収束のたびに
 	// 「たまたま間に合ったか」で結果が変わる。
-	if err := system.WaitReady(ctx, r, conn, dbReadyTries); err != nil {
+	if err := system.WaitReady(ctx, r, conn, n.Database, dbReadyTries); err != nil {
 		return system.Conn{}, err
 	}
 	return conn, nil

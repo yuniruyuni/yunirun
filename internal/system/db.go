@@ -120,14 +120,26 @@ func runPsql(ctx context.Context, r Runner, c Conn, db, sql string) ([]byte, err
 		"-h", c.SocketDir, "-U", c.Owner, "-d", db)
 }
 
-// WaitReady は DB が接続を受け付けるまで待つ。
+// WaitReady は目的の DB が使えるようになるまで待つ。
 //
 // コンテナの起動は非同期で、初回は initdb が走るぶん時間がかかる。待たずに
 // 続けると、収束のたびに「たまたま間に合ったか」で結果が変わる。
-func WaitReady(ctx context.Context, r Runner, c Conn, tries int) error {
+//
+// postgres ではなく db を見るのが要点。公式イメージは初期化の途中で一時的な
+// サーバを立て、そこで POSTGRES_DB を作る。この間 postgres には繋がるので、
+// postgres で判定すると「応答したのに目的の DB が無い」という窓を通り抜けて
+// しまう。実際 e2e が
+//
+//	beta のロール作成に失敗しました: ... database "beta" does not exist
+//
+// で間欠的に落ちていた。
+// readyInterval は再試行の間隔。テストから縮められるよう var にしてある。
+var readyInterval = 2 * time.Second
+
+func WaitReady(ctx context.Context, r Runner, c Conn, db string, tries int) error {
 	var last error
 	for i := 0; i < tries; i++ {
-		if _, err := runPsql(ctx, r, c, "postgres", "SELECT 1;"); err == nil {
+		if _, err := runPsql(ctx, r, c, db, "SELECT 1;"); err == nil {
 			return nil
 		} else {
 			last = err
@@ -135,10 +147,10 @@ func WaitReady(ctx context.Context, r Runner, c Conn, tries int) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(readyInterval):
 		}
 	}
-	return fmt.Errorf("%s の DB が応答しません: %w", c.SocketDir, last)
+	return fmt.Errorf("%s の DB %s が使えるようになりません: %w", c.SocketDir, db, last)
 }
 
 // VerifyAppGrants は、アプリのロールが実際にテーブルを使えることを確かめる。
