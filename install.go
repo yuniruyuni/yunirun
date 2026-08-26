@@ -181,6 +181,12 @@ func checkPrereqs(cfg *config.Config, generate bool) error {
 	if _, err := exec.LookPath("psql"); err != nil {
 		missing = append(missing, "psql (postgresql-client) が見つかりません")
 	}
+	// アプリは rootless の user unit として動く。これが無いと
+	// XDG_RUNTIME_DIR が設定されず user@<uid>.service が起動しない。
+	if !hasPAMSystemd() {
+		missing = append(missing, "pam_systemd.so が見つかりません "+
+			"(Debian 系は libpam-systemd)。無いとアプリの systemd が起動しません")
+	}
 	for _, k := range []struct{ what, path string }{
 		{"hostKeyPath", cfg.HostKeyPath},
 		{"secretsKeyPath", cfg.SecretsKeyPath},
@@ -204,6 +210,35 @@ func checkPrereqs(cfg *config.Config, generate bool) error {
 		return fmt.Errorf("足りないものがあります:\n  - %s", strings.Join(missing, "\n  - "))
 	}
 	return nil
+}
+
+// pamSystemdGlobs は pam_systemd.so が置かれうる場所。
+//
+// 配布によって違う。Debian 系は多重アーキテクチャの階層に入り、
+// Fedora 系は lib64 に入る。
+var pamSystemdGlobs = []string{
+	"/usr/lib/security/pam_systemd.so",
+	"/usr/lib64/security/pam_systemd.so",
+	"/usr/lib/*/security/pam_systemd.so",
+	"/lib/security/pam_systemd.so",
+	"/lib/*/security/pam_systemd.so",
+}
+
+// hasPAMSystemd は pam_systemd.so が在るかを返す。
+//
+// 無いと user@<uid>.service が
+//
+//	Trying to run as user instance, but $XDG_RUNTIME_DIR is not set.
+//
+// で落ちる。converge からは「systemd が起動しません」としか見えず、真因は
+// 別の unit のログに埋もれる。Debian で実際にここで詰まった。
+func hasPAMSystemd() bool {
+	for _, g := range pamSystemdGlobs {
+		if m, err := filepath.Glob(g); err == nil && len(m) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // generateKey は age の秘密鍵を作る。

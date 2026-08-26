@@ -163,7 +163,10 @@ func waitUserInstance(ctx context.Context, r Runner, uid int) error {
 		case <-time.After(time.Second):
 		}
 	}
-	return fmt.Errorf("%s が起動しませんでした", unit)
+	// 真因はこの unit のログにしか出ない。よくある形を挙げておく。
+	return fmt.Errorf("%s が起動しませんでした "+
+		"(journalctl -u %s で見られます。XDG_RUNTIME_DIR is not set なら "+
+		"pam_systemd.so が入っていません)", unit, unit)
 }
 
 // EnableUserTimers は timer を有効にして起動する。
