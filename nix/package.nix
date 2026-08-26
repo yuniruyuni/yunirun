@@ -10,7 +10,7 @@ buildGoModule (finalAttrs: {
 
   src = lib.cleanSource ../.;
 
-  vendorHash = "sha256-326rQNHnIqyodsVe//Qp5TNTd07elNlY8Xp4ZJThnEk=";
+  vendorHash = "sha256-holdL/SYwJfKdF+07w1fBUARfzmPGA3PNQtqFAtEWDs=";
 
   ldflags = [
     "-s"
@@ -18,7 +18,7 @@ buildGoModule (finalAttrs: {
     "-X=main.version=${finalAttrs.version}"
   ];
 
-  # 実行時に呼ぶ外部コマンド (podman / psql / age / systemctl / curl) は
+  # 実行時に呼ぶ外部コマンド (podman / psql / systemctl / shadow) は
   # 意図的に PATH 解決に任せている。NixOS モジュール側で systemd の path を
   # 与える方が、どの実装を使うかをシステム側で決められて都合が良い。
 

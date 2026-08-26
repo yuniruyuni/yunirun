@@ -34,13 +34,13 @@ let
   # どの実装を使うかをシステム側が握れる。
   runtimePath = lib.makeBinPath [
     pkgs.podman
-    pkgs.age
     pkgs.postgresql
-    pkgs.curl
     pkgs.systemd
     pkgs.shadow
     # runuser。psql を postgres として実行するのに使う。
     pkgs.util-linux
+    # yunirun 自身は呼ばないが、podman や psql が起こす子プロセスが
+    # 前提にすることがあるので残す。
     pkgs.coreutils
     pkgs.sudo
     "/run/wrappers"

@@ -31,6 +31,9 @@ func NewPassword() (string, error) {
 
 // Vault は age で暗号化した秘密の置き場所。
 //
+// 暗号化はライブラリで行う。外部コマンドを持たないので、値が argv や
+// 別プロセスへ渡ることが構造として起こらない。
+//
 // yunirun が生成する秘密 (DB パスワード) はマシンの外に出る必要が無いので
 // 人が管理しない。ホスト鍵に加えて管理者鍵にも暗号化しておき、ホストを
 // 失っても復旧できるようにする。
@@ -39,7 +42,6 @@ type Vault struct {
 	HostKeyPath    string
 	HostRecipient  string
 	AdminRecipient string
-	Runner         Runner
 }
 
 // Path は名前に対応する暗号文の位置を返す。
@@ -59,12 +61,7 @@ func (v Vault) Put(ctx context.Context, name, value string) error {
 	if err := os.MkdirAll(v.Dir, 0o700); err != nil {
 		return err
 	}
-	args := []string{"-r", v.HostRecipient}
-	if v.AdminRecipient != "" {
-		args = append(args, "-r", v.AdminRecipient)
-	}
-	// 値は stdin で渡す。argv に載せると ps から見える。
-	out, err := v.Runner.Run(ctx, []byte(value), "age", args...)
+	out, err := Encrypt(value, v.HostRecipient, v.AdminRecipient)
 	if err != nil {
 		return fmt.Errorf("%s の暗号化に失敗しました: %w", name, err)
 	}
@@ -78,7 +75,7 @@ func (v Vault) Get(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out, err := v.Runner.Run(ctx, b, "age", "-d", "-i", v.HostKeyPath)
+	out, err := Decrypt(b, v.HostKeyPath)
 	if err != nil {
 		return "", fmt.Errorf("%s の復号に失敗しました: %w", name, err)
 	}

@@ -26,10 +26,10 @@ func runRecipient(ctx context.Context, args []string) error {
 	if cfg.SecretsKeyPath == "" {
 		return fmt.Errorf("secretsKeyPath が設定されていません")
 	}
-	out, err := system.ExecRunner{}.Run(ctx, nil, "age-keygen", "-y", cfg.SecretsKeyPath)
+	pub, err := system.Recipient(cfg.SecretsKeyPath)
 	if err != nil {
 		return fmt.Errorf("公開鍵を導けません: %w", err)
 	}
-	fmt.Print(string(out))
+	fmt.Println(pub)
 	return nil
 }
