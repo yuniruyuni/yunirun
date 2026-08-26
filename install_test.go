@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yuniruyuni/yunirun/internal/config"
 )
 
 const testConfigJSON = `{"domain":"example.test","stateDir":"/var/lib/yunirun",
@@ -206,5 +208,53 @@ func TestInstallWritesUnitsSystemdAccepts(t *testing.T) {
 			}
 		}
 		_ = err
+	}
+}
+
+// 鍵を失うと保存した秘密を復号できない。既にあるものを潰してはいけない。
+func TestGenerateKeyNeverOverwrites(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "key.txt")
+	if err := os.WriteFile(p, []byte("AGE-SECRET-KEY-EXISTING\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := generateKey(p); err == nil {
+		t.Fatal("既存の鍵を上書きした")
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "AGE-SECRET-KEY-EXISTING\n" {
+		t.Fatalf("中身が変わっている: %q", b)
+	}
+}
+
+// 秘密鍵なので所有者だけが読めること。
+func TestGenerateKeyIsOwnerReadOnly(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sub", "key.txt")
+	if err := generateKey(p); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o400 {
+		t.Errorf("モードが %04o", fi.Mode().Perm())
+	}
+}
+
+// 据え付けてから converge が落ちて初めて分かるより、先に言う方が早い。
+func TestPrereqsReportsMissingKeys(t *testing.T) {
+	cfg := &config.Config{
+		Domain: "x.test", StateDir: "/var/lib/yunirun",
+		HostKeyPath: filepath.Join(t.TempDir(), "nope.txt"),
+	}
+	err := checkPrereqs(cfg, false)
+	if err == nil {
+		t.Fatal("鍵が無いのに通った")
+	}
+	if !strings.Contains(err.Error(), "hostKeyPath") {
+		t.Errorf("何が足りないか言っていない: %v", err)
 	}
 }
