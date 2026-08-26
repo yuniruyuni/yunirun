@@ -402,7 +402,9 @@ func (s StackSpec) StackUnits() map[string]string {
 				"Volume=/proc:/host/proc:ro",
 				"Volume=/sys:/host/sys:ro",
 				"Volume=/:/host/root:ro,rslave",
-				fmt.Sprintf("Exec=--path.procfs=/host/proc --path.sysfs=/host/sys --path.rootfs=/host/root --web.listen-address=127.0.0.1:%d", NodePort),
+				// 収束の外にある仕組みが置いた指標を取り込む。
+				fmt.Sprintf("Volume=%s:/host/textfile:ro", s.TextfileDir()),
+				fmt.Sprintf("Exec=--path.procfs=/host/proc --path.sysfs=/host/sys --path.rootfs=/host/root --collector.textfile.directory=/host/textfile --web.listen-address=127.0.0.1:%d", NodePort),
 			}),
 
 		"yunirun-tempo.container": stackUnit(
@@ -429,8 +431,17 @@ func (s StackSpec) StackUnits() map[string]string {
 // unit の Volume とこの一覧がずれると、podman が
 // "statfs ...: no such file or directory" で起動できない (実際に踏んだ)。
 // 一覧を 1 か所に置いて、両方がここを見るようにする。
+// TextfileDir は node exporter が取り込む指標ファイルの置き場所を返す。
+//
+// 収束の外にある仕組み (バックアップなど) が「最後に成功した時刻」のような
+// 事実をここへ置くと、その場で指標になる。yunirun 側は場所と取り込みだけを
+// 用意し、中身が何かは知らない。
+func (s StackSpec) TextfileDir() string {
+	return filepath.Join(s.Dir, "textfile")
+}
+
 func (s StackSpec) StackDataDirs() []string {
-	out := []string{s.TraceSocketDir()}
+	out := []string{s.TraceSocketDir(), s.TextfileDir()}
 	for _, d := range []string{"prometheus", "loki", "alloy", "grafana", "tempo"} {
 		out = append(out, filepath.Join(s.Dir, d))
 	}
@@ -543,6 +554,32 @@ func alertRules() []alertRule {
 			Op:   "gt", Threshold: "0", For: "5m", Severity: "warning",
 			Summary: "{{ $labels.proxy }} が 5xx を返している",
 			NoData:  "NoData",
+		},
+		{
+			UID: "yunirun-disk-low", Title: "ディスクが少ない",
+			// 装置でまとめる。同じ装置を複数の場所へ結び付けている場合
+			// (NixOS の /nix/store など) に、同じ 1 台で二重に鳴るのを避ける。
+			// 仮想のファイルシステムは実体が無いので外す。
+			Expr: `min by (device) (` +
+				`node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs|fuse.*"} / ` +
+				`node_filesystem_size_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs|fuse.*"} * 100)`,
+			// 埋まってから気づいても遅い。片付ける時間が要るので早めに鳴らす。
+			Op: "lt", Threshold: "15", For: "15m", Severity: "warning",
+			Summary: "{{ $labels.device }} の空きが 15% を切っている",
+			NoData:  "NoData",
+		},
+		{
+			UID: "yunirun-backup-stale", Title: "バックアップが取れていない",
+			// 「失敗した」ではなく「成功していない」を見る。失敗を見ると、
+			// そもそも動かなかった場合を取りこぼす。timer が止まっていても
+			// script が消えていても、成功が途絶えれば同じように現れる。
+			Expr: `time() - max by (job) (yunirun_backup_last_success_seconds)`,
+			// 1 日 1 回の想定に対して 36 時間。1 回の失敗では鳴らさず、
+			// 2 回続けて取れていない状態を捉える。
+			Op: "gt", Threshold: "129600", For: "10m", Severity: "critical",
+			Summary: "{{ $labels.job }} のバックアップが 36 時間以上成功していない",
+			// 指標そのものが消えるのも「取れていない」の一種。黙らせない。
+			NoData: "Alerting",
 		},
 		{
 			UID: "yunirun-metrics-blind", Title: "計測が届いていない",

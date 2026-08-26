@@ -49,9 +49,12 @@ func TestNothingInTheStackListensOutsideLoopback(t *testing.T) {
 }
 
 // bind mount の元は root 所有で、各 image は別々の非 root ユーザで動く。
-// :U が無いと書き込みが Permission denied になる。
+// 書き込む領域に :U が無いと Permission denied になる。
 //
-// トレースの口だけは対象外。あちらはアプリのグループで共有するので、:U で
+// 読むだけの場所は対象外。むしろ :U を付けてはいけない。所有者を書き手から
+// 奪うことになる (指標の置き場は root が書いて node exporter が読む)。
+//
+// トレースの口も対象外。あちらはアプリのグループで共有するので、:U で
 // Tempo の uid に付け替えると他が繋げなくなる。
 func TestStackDataVolumesAreChownedToTheContainerUser(t *testing.T) {
 	sock := spec().TraceSocketDir()
@@ -63,8 +66,25 @@ func TestStackDataVolumesAreChownedToTheContainerUser(t *testing.T) {
 			if strings.HasPrefix(line, "Volume="+sock+":") {
 				continue
 			}
+			if strings.HasSuffix(line, ":ro") {
+				continue
+			}
 			if !strings.HasSuffix(line, ":U") {
 				t.Fatalf("%s のデータ領域に :U が無い: %s", name, line)
+			}
+		}
+	}
+}
+
+// 読むだけの場所を :U にすると、所有者を書き手から奪ってしまう。
+func TestReadOnlyStackVolumesAreNotChowned(t *testing.T) {
+	for name, unit := range spec().StackUnits() {
+		for _, line := range strings.Split(unit, "\n") {
+			if !strings.HasPrefix(line, "Volume=") {
+				continue
+			}
+			if strings.Contains(line, ":ro") && strings.Contains(line, ":U") {
+				t.Errorf("%s が読むだけの場所を chown している: %s", name, line)
 			}
 		}
 	}
@@ -409,4 +429,95 @@ func TestTempoIsInTheGroupThatGuardsItsOwnSocket(t *testing.T) {
 	if !strings.Contains(u, "GroupAdd=983") {
 		t.Fatalf("グループに入れていない:\n%s", u)
 	}
+}
+
+// 見張る対象が増えたことを固定する。規則が減っていることに気づけないと、
+// 「見ているつもりで見ていない」状態に戻る。
+func TestAlertRulesCoverDiskAndBackup(t *testing.T) {
+	want := map[string]bool{
+		"yunirun-origin-down":    false,
+		"yunirun-replica-down":   false,
+		"yunirun-backend-errors": false,
+		"yunirun-metrics-blind":  false,
+		"yunirun-disk-low":       false,
+		"yunirun-backup-stale":   false,
+	}
+	for _, r := range alertRules() {
+		if _, ok := want[r.UID]; !ok {
+			t.Errorf("知らない規則が増えている: %s", r.UID)
+			continue
+		}
+		want[r.UID] = true
+	}
+	for uid, found := range want {
+		if !found {
+			t.Errorf("%s が無い", uid)
+		}
+	}
+}
+
+// バックアップは「失敗した」ではなく「成功していない」で見る。失敗を見ると、
+// そもそも動かなかった場合 (timer が止まった、script が消えた) を取りこぼす。
+func TestBackupAlertWatchesAbsenceOfSuccessNotFailure(t *testing.T) {
+	r := ruleByUID(t, "yunirun-backup-stale")
+	if !strings.Contains(r.Expr, "yunirun_backup_last_success_seconds") {
+		t.Errorf("最後に成功した時刻を見ていない: %s", r.Expr)
+	}
+	if !strings.Contains(r.Expr, "time()") {
+		t.Errorf("経過時間で見ていない: %s", r.Expr)
+	}
+	// 指標そのものが消えるのも「取れていない」の一種。黙らせてはいけない。
+	if r.NoData != "Alerting" {
+		t.Errorf("指標が消えたときに黙る: noDataState=%s", r.NoData)
+	}
+}
+
+// 同じ 1 台の装置を複数の場所へ結び付けている場合 (NixOS の /nix/store など)、
+// 場所でまとめると同じ空き容量で二重に鳴る。
+func TestDiskAlertGroupsByDeviceNotMountpoint(t *testing.T) {
+	r := ruleByUID(t, "yunirun-disk-low")
+	if !strings.Contains(r.Expr, "by (device)") {
+		t.Errorf("装置でまとめていない: %s", r.Expr)
+	}
+	if strings.Contains(r.Expr, "by (mountpoint)") {
+		t.Errorf("場所でまとめている (同じ装置で二重に鳴る): %s", r.Expr)
+	}
+	// 実体の無いファイルシステムは常に満杯や空に見えるので外す。
+	if !strings.Contains(r.Expr, "tmpfs") {
+		t.Errorf("仮想のファイルシステムを外していない: %s", r.Expr)
+	}
+}
+
+// 指標の置き場を読むだけにしないと、書き手 (root) から所有者を奪う。
+// 取り込みの指定が無ければ、ファイルを置いても指標にならない。
+func TestNodeExporterReadsTheTextfileDirectory(t *testing.T) {
+	unit := spec().StackUnits()["yunirun-node.container"]
+	if !strings.Contains(unit, "--collector.textfile.directory=/host/textfile") {
+		t.Errorf("取り込みの指定が無い:\n%s", unit)
+	}
+	if !strings.Contains(unit, "Volume="+spec().TextfileDir()+":/host/textfile:ro") {
+		t.Errorf("置き場を読むだけで渡していない:\n%s", unit)
+	}
+}
+
+// unit の Volume と作る場所がずれると podman が statfs で起動できない。
+func TestTextfileDirectoryIsCreated(t *testing.T) {
+	want := spec().TextfileDir()
+	for _, d := range spec().StackDataDirs() {
+		if d == want {
+			return
+		}
+	}
+	t.Fatalf("%s を作る一覧に入っていない: %v", want, spec().StackDataDirs())
+}
+
+func ruleByUID(t *testing.T, uid string) alertRule {
+	t.Helper()
+	for _, r := range alertRules() {
+		if r.UID == uid {
+			return r
+		}
+	}
+	t.Fatalf("%s が無い", uid)
+	return alertRule{}
 }
