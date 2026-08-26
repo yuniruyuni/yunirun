@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -115,29 +116,20 @@ func TestDatabaseCanBeDeclared(t *testing.T) {
 	}
 }
 
-func TestSecretsAreDeclaredByNameNotValue(t *testing.T) {
-	m, err := Parse([]byte(`{"app":{"secrets":{"BETTER_AUTH_SECRET":"streamer-post-better-auth-secret"}}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.App.Secrets["BETTER_AUTH_SECRET"] != "streamer-post-better-auth-secret" {
-		t.Fatalf("読めていない: %+v", m.App.Secrets)
-	}
-}
-
-// 秘密の名前はファイルパスの一部になる。ここを緩めると /run/agenix の外を
-// 指せてしまい、任意のファイルを環境変数として読み出せる。
-func TestSecretNameCannotEscapeTheSecretsDirectory(t *testing.T) {
-	for _, bad := range []string{
-		"../../etc/shadow",
-		"/etc/shadow",
-		"a/b",
-		"..",
-		"-leading-dash",
+// 黙って捨てると、秘密を宣言しているつもりのアプリが環境変数の無いまま
+// 起動する。認証がなぜか失敗するという形でしか現れない。
+func TestRemovedDeclarationsAreRejectedNotIgnored(t *testing.T) {
+	for _, src := range []string{
+		`{"app":{"secrets":{"BETTER_AUTH_SECRET":"streamer-post-better-auth-secret"}}}`,
+		`{"app":{"database":true,"databasePasswords":{"owner":"db-password-x"}}}`,
 	} {
-		src := `{"app":{"secrets":{"X":"` + bad + `"}}}`
-		if _, err := Parse([]byte(src)); err == nil {
-			t.Fatalf("秘密の名前 %q を受け入れてしまった", bad)
+		_, err := Parse([]byte(src))
+		if err == nil {
+			t.Fatalf("黙って受け入れた: %s", src)
+		}
+		// 何をすればよいかが分からないと直せない。
+		if !strings.Contains(err.Error(), "廃止") {
+			t.Errorf("代わりを案内していない: %v", err)
 		}
 	}
 }
@@ -152,7 +144,7 @@ func TestEnvNameRejectsInjection(t *testing.T) {
 		"WITH SPACE",
 	} {
 		key, _ := json.Marshal(bad)
-		if _, err := Parse([]byte(`{"app":{"secrets":{` + string(key) + `:"x"}}}`)); err == nil {
+		if _, err := Parse([]byte(`{"app":{"env":{` + string(key) + `:"x"}}}`)); err == nil {
 			t.Fatalf("環境変数名 %q を受け入れてしまった", bad)
 		}
 	}
@@ -184,33 +176,5 @@ func TestDatabaseNameRejectsUnsafeCharacters(t *testing.T) {
 		if _, err := Parse([]byte(`{"app":{"databaseName":"` + bad + `"}}`)); err == nil {
 			t.Fatalf("DB 名 %q を受け入れてしまった", bad)
 		}
-	}
-}
-
-// 移行期間中に旧システムと DB を共有する場合、パスワードを変えると旧側の
-// 稼働中コンテナが即座に認証に失敗する。既存の秘密を指定できる必要がある。
-func TestExistingDatabasePasswordsCanBeReused(t *testing.T) {
-	m, err := Parse([]byte(`{"app":{"database":true,"databasePasswords":{"owner":"db-password-x","app":"db-password-x_app"}}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.App.DatabasePasswords[RoleOwner] != "db-password-x" {
-		t.Fatalf("owner の指定が読めていない: %+v", m.App.DatabasePasswords)
-	}
-	if m.App.DatabasePasswords[RoleApp] != "db-password-x_app" {
-		t.Fatalf("app の指定が読めていない: %+v", m.App.DatabasePasswords)
-	}
-}
-
-func TestDatabasePasswordsRejectsUnknownRole(t *testing.T) {
-	// 綴り違いを黙って無視すると、生成した値で上書きされて旧側が止まる。
-	if _, err := Parse([]byte(`{"app":{"databasePasswords":{"onwer":"x"}}}`)); err == nil {
-		t.Fatal("未知のロールを受け入れてしまった")
-	}
-}
-
-func TestDatabasePasswordsRejectsUnsafeSecretName(t *testing.T) {
-	if _, err := Parse([]byte(`{"app":{"databasePasswords":{"owner":"../../etc/shadow"}}}`)); err == nil {
-		t.Fatal("パスを抜ける名前を受け入れてしまった")
 	}
 }

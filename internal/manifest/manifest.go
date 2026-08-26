@@ -46,17 +46,9 @@ type App struct {
 	// Env は秘密でない環境変数。
 	//
 	// OAuth の client_id のように仕様上公開される値や、アプリ自身の URL など。
-	// 秘密は Secrets 側に書く。
+	// unit ファイルへそのまま書き出されるので、秘密はここに置かない。
+	// 秘密はリポジトリの secrets/<ENV_NAME>.age に暗号文として置く。
 	Env map[string]string `json:"env"`
-
-	// Secrets は環境変数名から、その値を持つ秘密の名前への対応。
-	//
-	// 値そのものは書かない。ここに書くのは「どの秘密を、どの環境変数として
-	// 渡すか」という対応だけで、値は yunirun が /run/agenix から実行時に読む。
-	//
-	// 秘密の実体を infra 側 (agenix) に置くのは、アプリのリポジトリに秘密を
-	// 置かないという方針のため。アプリ側は名前だけを知っていればよい。
-	Secrets map[string]string `json:"secrets"`
 
 	// DatabaseName は使う DB の名前。空ならアプリ名を使う。
 	//
@@ -64,17 +56,6 @@ type App struct {
 	// 既に動いている DB の名前が食い違うことがあるため。名前が揃っていれば
 	// 書かなくてよい。
 	DatabaseName string `json:"databaseName"`
-
-	// DatabasePasswords は既存の DB パスワードを持つ秘密の名前。
-	// { "owner": "db-password-x", "app": "db-password-x_app" } の形。
-	//
-	// 指定すると yunirun はパスワードを生成せず、この秘密の値をそのまま使う。
-	// 既存の DB を旧システムと並行して使う間、パスワードを変えると旧側の
-	// 稼働中コンテナが即座に認証に失敗するため。
-	//
-	// 移行が済んだら外してよい。外すと次の収束で yunirun が生成した値に
-	// 切り替わる (そのときは全コンテナが再起動される前提)。
-	DatabasePasswords map[string]string `json:"databasePasswords"`
 
 	// Database はこのアプリが PostgreSQL を使うか。
 	//
@@ -136,10 +117,42 @@ func Parse(b []byte) (*Manifest, error) {
 	if err := json.Unmarshal(jsonc.ToJSON(b), &m); err != nil {
 		return nil, fmt.Errorf("yunirun.jsonc を読めません: %w", err)
 	}
+	if err := rejectRemoved(jsonc.ToJSON(b)); err != nil {
+		return nil, err
+	}
 	if err := m.validate(); err != nil {
 		return nil, err
 	}
 	return withDefaults(&m), nil
+}
+
+// removed は受け付けなくなった宣言と、その代わり。
+//
+// encoding/json は知らない鍵を黙って捨てる。捨てたままにすると、秘密を
+// 宣言しているつもりのアプリが、環境変数の無い状態で起動してしまう。
+// 認証がなぜか失敗するという形でしか現れないので、ここで断る。
+var removed = map[string]string{
+	"secrets": "app.secrets は廃止しました。" +
+		"秘密はリポジトリの secrets/<ENV_NAME>.age に暗号文として置いてください " +
+		"(宛先は yunirun recipient で表示できます)",
+	"databasePasswords": "app.databasePasswords は廃止しました。" +
+		"DB パスワードは yunirun が生成して管理します",
+}
+
+func rejectRemoved(b []byte) error {
+	// App だけを鍵の集合として読み直す。値の形は問わない。
+	var raw struct {
+		App map[string]json.RawMessage `json:"app"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil
+	}
+	for key, msg := range removed {
+		if _, ok := raw.App[key]; ok {
+			return fmt.Errorf("%s", msg)
+		}
+	}
+	return nil
 }
 
 func (m *Manifest) validate() error {
@@ -150,14 +163,6 @@ func (m *Manifest) validate() error {
 		// DB 名は SQL とファイルパスの両方に現れる。
 		return fmt.Errorf("DB 名に使えない文字が含まれています: %q", m.App.DatabaseName)
 	}
-	for role, secret := range m.App.DatabasePasswords {
-		if role != RoleOwner && role != RoleApp {
-			return fmt.Errorf("databasePasswords の鍵は owner か app です: %q", role)
-		}
-		if !secretRE.MatchString(secret) {
-			return fmt.Errorf("秘密の名前に使えない文字が含まれています: %q", secret)
-		}
-	}
 	for env, v := range m.App.Env {
 		if !envRE.MatchString(env) {
 			return fmt.Errorf("環境変数名に使えない文字が含まれています: %q", env)
@@ -166,17 +171,6 @@ func (m *Manifest) validate() error {
 		// 差し込める。
 		if strings.ContainsAny(v, "\r\n") {
 			return fmt.Errorf("環境変数 %s の値に改行が含まれています", env)
-		}
-	}
-	for env, secret := range m.App.Secrets {
-		// 環境変数名は unit ファイルへ書き出す。
-		if !envRE.MatchString(env) {
-			return fmt.Errorf("環境変数名に使えない文字が含まれています: %q", env)
-		}
-		// 秘密の名前はファイルパスの一部になる。ここを緩めると
-		// /run/agenix の外を指せてしまう。
-		if !secretRE.MatchString(secret) {
-			return fmt.Errorf("秘密の名前に使えない文字が含まれています: %q", secret)
 		}
 	}
 	for name, w := range m.Workloads {
