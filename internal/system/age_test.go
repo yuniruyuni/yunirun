@@ -92,3 +92,34 @@ func TestEncryptRejectsNoRecipient(t *testing.T) {
 		t.Fatal("宛先が無いのに通った")
 	}
 }
+
+// age(1) に依存しなくなったので、新しいホストで鍵を用意する手段はこれだけ。
+func TestNewIdentityRoundTrips(t *testing.T) {
+	body, pub, err := NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "key.txt")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 書いたものが鍵として読め、公開鍵が一致すること。
+	got, err := Recipient(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != pub {
+		t.Fatalf("公開鍵が一致しない: %q と %q", got, pub)
+	}
+	ct, err := Encrypt("v", pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Decrypt(ct, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "v" {
+		t.Fatalf("%q", out)
+	}
+}

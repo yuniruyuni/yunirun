@@ -32,6 +32,7 @@ func runInstall(ctx context.Context, args []string) error {
 	// 書き出し先をずらせるようにしてある。イメージを組む際の staging と、
 	// 置く側の経路をテストから確かめるのに使う。
 	rootFlag := fs.String("root", "", "この位置を頂点として置く (systemd への反映は行わない)")
+	genKeys := fs.Bool("generate-keys", false, "設定が指す age 鍵が無ければ作る")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -66,6 +67,13 @@ func runInstall(ctx context.Context, args []string) error {
 	if os.Geteuid() != 0 && !staging {
 		return fmt.Errorf("root で実行してください")
 	}
+	if !staging {
+		// 置く前に見る。据え付けてから converge が落ちて初めて分かるより、
+		// 何が足りないかをここで言う方が早い。
+		if err := checkPrereqs(cfg, *genKeys); err != nil {
+			return err
+		}
+	}
 	for _, f := range files {
 		if err := placeFile(root, f); err != nil {
 			return err
@@ -88,7 +96,9 @@ func runInstall(ctx context.Context, args []string) error {
 	if in.Usage {
 		units = append(units, "yunirun-usage.service")
 	}
-	if _, err := r.Run(ctx, nil, "systemctl", append([]string{"enable", "--now"}, units...)...); err != nil {
+	// enable と start を分ける。まとめると、有効にはなったが収束に失敗した
+	// 場合に「有効にできません」と嘘を言うことになる。実際そうなっていた。
+	if _, err := r.Run(ctx, nil, "systemctl", append([]string{"enable"}, units...)...); err != nil {
 		return fmt.Errorf("有効にできません: %w", err)
 	}
 
@@ -97,6 +107,13 @@ func runInstall(ctx context.Context, args []string) error {
 	if len(in.Apps) > 0 {
 		fmt.Println("deploy を許す認可 (opkssh など) は別に用意する必要があります。")
 	}
+
+	if _, err := r.Run(ctx, nil, "systemctl", append([]string{"start"}, units...)...); err != nil {
+		// 据え付け自体は終わっている。どこで止まったのかを混ぜない。
+		return fmt.Errorf("据え付けは終わりましたが最初の収束に失敗しました "+
+			"(journalctl -u yunirun-converge.service で原因が見られます): %w", err)
+	}
+	fmt.Println("収束しました。")
 	return nil
 }
 
@@ -149,6 +166,70 @@ func installDirs(cfg *config.Config) map[string]string {
 func stagingRoot(flag string) (string, bool) {
 	root := strings.TrimRight(flag, "/")
 	return root, root != ""
+}
+
+// checkPrereqs は据え付ける前に、足りないものを挙げる。
+//
+// 途中まで置いてから converge が落ちるより、何が要るかを先に言う方が早い。
+func checkPrereqs(cfg *config.Config, generate bool) error {
+	var missing []string
+	// converge は image の取得と実行に podman を使う。
+	if _, err := exec.LookPath("podman"); err != nil {
+		missing = append(missing, "podman が見つかりません")
+	}
+	// DB の作成とロールの確認に psql を使う。
+	if _, err := exec.LookPath("psql"); err != nil {
+		missing = append(missing, "psql (postgresql-client) が見つかりません")
+	}
+	for _, k := range []struct{ what, path string }{
+		{"hostKeyPath", cfg.HostKeyPath},
+		{"secretsKeyPath", cfg.SecretsKeyPath},
+	} {
+		if k.path == "" {
+			continue
+		}
+		if _, err := os.Stat(k.path); err == nil {
+			continue
+		}
+		if !generate {
+			missing = append(missing, fmt.Sprintf(
+				"%s が指す %s がありません (--generate-keys で作れます)", k.what, k.path))
+			continue
+		}
+		if err := generateKey(k.path); err != nil {
+			return err
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("足りないものがあります:\n  - %s", strings.Join(missing, "\n  - "))
+	}
+	return nil
+}
+
+// generateKey は age の秘密鍵を作る。
+//
+// age(1) に依存しなくなったので、これが無いと新しいホストで鍵を用意する
+// 手段が無い。既にあるものには触らない。失うと復号できなくなる。
+func generateKey(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	id, pub, err := system.NewIdentity()
+	if err != nil {
+		return err
+	}
+	// O_EXCL。競合しても既存を潰さない。
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o400)
+	if err != nil {
+		return fmt.Errorf("%s を作れません: %w", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(id); err != nil {
+		return err
+	}
+	fmt.Printf("%s を作りました。公開鍵は %s です。\n", path, pub)
+	fmt.Println("この鍵を失うと保存した秘密を復号できません。adminRecipient に控えの宛先を設定してください。")
+	return nil
 }
 
 // ephemeralPrefixes は再起動や後片付けで消えうる場所。

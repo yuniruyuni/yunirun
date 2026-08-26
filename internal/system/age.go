@@ -95,3 +95,16 @@ func Recipient(keyPath string) (string, error) {
 	}
 	return "", fmt.Errorf("%s に X25519 の鍵がありません", keyPath)
 }
+
+// NewIdentity は新しい age の鍵を作り、identity ファイルの中身と公開鍵を返す。
+//
+// age-keygen に依存しなくなったので、新しいホストで鍵を用意する手段として要る。
+func NewIdentity() (string, string, error) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		return "", "", err
+	}
+	pub := id.Recipient().String()
+	body := fmt.Sprintf("# public key: %s\n%s\n", pub, id.String())
+	return body, pub, nil
+}

@@ -158,9 +158,17 @@ NixOS ではモジュールが unit とディレクトリと sudo の許可を�
 # 何が置かれるかを見る
 yunirun install --from ./config.json --dry-run
 
-# 据え付ける
-sudo yunirun install --from ./config.json
+# 据え付ける (age 鍵が無ければ作る)
+sudo yunirun install --from ./config.json --generate-keys
 ```
+
+据え付ける前に前提を見て、足りないものをまとめて挙げる。何も置かずに止まる
+ので、途中まで置かれた状態にはならない。
+
+`--generate-keys` は設定が指す age 鍵が無ければ作る。既にあるものには触らない。
+`age-keygen` に依存しなくなったので、新しいホストで鍵を用意する手段はこれになる。
+**この鍵を失うと保存した秘密を復号できない。** `adminRecipient` に控えの宛先を
+設定しておく。
 
 `--root DIR` を付けると、その下に置くだけで systemd への反映は行わない。
 イメージを組む際の staging に使える。
@@ -177,6 +185,10 @@ NixOS では宣言と競合するので断る。そちらでは `services.yuniru
 **前提**: `podman` / `systemd` / `sudo` / `visudo` / `postgresql-client` が
 入っていること。`install` は壊れた `sudoers` を置かないよう、置く前に
 `visudo` に検査させる。
+
+Debian 13 (systemd 257) のコンテナで、置く・ディレクトリを作る・unit を
+有効にする・`yunirun usage` が動いて `/metrics` を返す、まで通してある。
+`converge` まではその環境では通せない (logind と入れ子の podman が無い)。
 
 schema の適用は provision ではなく deploy 側にある。デプロイのたびに必要なため。
 
