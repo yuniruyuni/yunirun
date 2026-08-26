@@ -27,6 +27,7 @@ const (
 	AlloyPort      = 8093
 	NodePort       = 8094
 	TempoPort      = 8095
+	UsagePort      = 8096
 )
 
 // StackSpec は計測基盤を組み立てるのに要るもの。
@@ -78,6 +79,11 @@ func (s StackSpec) PrometheusConfig() string {
 	p("  - job_name: haproxy")
 	p("    static_configs:")
 	p("      - targets: ['127.0.0.1:%d']", MetricsPort)
+	// アプリごとの資源。ホスト全体では「どのアプリが食っているか」が
+	// 分からない。cgroup を読むだけなので追加のコンテナは要らない。
+	p("  - job_name: units")
+	p("    static_configs:")
+	p("      - targets: ['127.0.0.1:%d']", UsagePort)
 	// ホストの資源。USE (使用率・飽和・誤り) はここからしか取れない。
 	p("  - job_name: node")
 	p("    static_configs:")

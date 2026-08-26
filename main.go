@@ -38,6 +38,8 @@ func main() {
 		err = runDatabases(ctx, os.Args[2:])
 	case "recipient":
 		err = runRecipient(ctx, os.Args[2:])
+	case "usage":
+		err = runUsage(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -95,6 +97,10 @@ func usage() {
   yunirun recipient
       アプリ側の秘密を暗号化する宛先 (age 公開鍵) を表示する。アプリの作者は
       これに向けて secrets/<ENV_NAME>.age を作る。
+
+  yunirun usage [--once]
+      アプリごとの CPU とメモリを Prometheus の形で出す。cgroup を読むだけ
+      なので追加のコンテナが要らない。--once なら一度出して終える。
 
 設定の所在:
   /etc/yunirun/config.json   どのリポジトリを取り込むか (システム側)

@@ -301,6 +301,23 @@ func USEDashboard() string {
 				},
 			},
 			{
+				Title: "アプリごとの CPU", Unit: "percentunit",
+				Desc: "どれがコアをどれだけ使っているか。ホスト全体の使用率では、" +
+					"どのアプリが食っているかが分からない。",
+				Queries: []query{{
+					Expr:   `rate(yunirun_unit_cpu_seconds_total[5m])`,
+					Legend: "{{unit}}",
+				}},
+			},
+			{
+				Title: "アプリごとのメモリ", Unit: "bytes",
+				Desc: "unit ごとの実使用量。",
+				Queries: []query{{
+					Expr:   `yunirun_unit_memory_bytes`,
+					Legend: "{{unit}}",
+				}},
+			},
+			{
 				Title: "ネットワーク — 飽和 (取りこぼし)", Unit: "pps",
 				Desc: "捌ききれずに落とした数。",
 				Queries: []query{
