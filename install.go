@@ -36,10 +36,7 @@ func runInstall(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// "/" は staging ではない。ここを素通しにすると NixOS の拒否を
-	// --root / で迂回できてしまう。
-	root := strings.TrimSuffix(*rootFlag, "/")
-	staging := root != ""
+	root, staging := stagingRoot(*rootFlag)
 
 	if err := refuseOnNixOS(*dryRun || staging); err != nil {
 		return err
@@ -143,6 +140,15 @@ func installDirs(cfg *config.Config) map[string]string {
 		d[cfg.Observability.Dir] = "0755"
 	}
 	return d
+}
+
+// stagingRoot は --root の値から、置き場所と staging かどうかを返す。
+//
+// "/" や "" は staging ではない。素通しにすると、NixOS では断るという判断を
+// --root / で迂回できてしまう。
+func stagingRoot(flag string) (string, bool) {
+	root := strings.TrimRight(flag, "/")
+	return root, root != ""
 }
 
 // ephemeralPrefixes は再起動や後片付けで消えうる場所。

@@ -15,11 +15,31 @@ const testConfigJSON = `{"domain":"example.test","stateDir":"/var/lib/yunirun",
 "observability":{"enable":true,"dir":"/var/lib/yunirun-obs"},
 "apps":{"blog":"someone/blog"}}`
 
+// needTool は道具が無い環境では飛ばす。ただし CI では飛ばさない。
+//
+// 飛んだことは go test の既定の出力に現れないので、道具が入っていない CI では
+// 検査したつもりで何も検査していない状態になる。以前これで、意図した検査が
+// ずっと飛んでいたことに気づけなかった。
+func needTool(t *testing.T, name string) string {
+	t.Helper()
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	for _, p := range []string{"/usr/sbin/" + name, "/sbin/" + name} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if os.Getenv("CI") != "" {
+		t.Fatalf("%s が無い。CI では入っている前提", name)
+	}
+	t.Skipf("%s が無い", name)
+	return ""
+}
+
 func stageInstall(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("visudo"); err != nil {
-		t.Skip("visudo が無いので sudoers を検査できない")
-	}
+	needTool(t, "visudo")
 	dir := t.TempDir()
 	src := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(src, []byte(testConfigJSON), 0o644); err != nil {
@@ -52,8 +72,10 @@ func TestInstallPlacesEverythingTheModuleDoes(t *testing.T) {
 // 壊れた sudoers を置くと sudo 全体が使えなくなり、直す手段まで失う。
 // visudo に通るものだけを置く。
 func TestInstallWritesSudoersThatVisudoAccepts(t *testing.T) {
-	p := filepath.Join(stageInstall(t), "/etc/sudoers.d/yunirun")
-	out, err := exec.Command("visudo", "-c", "-f", p).CombinedOutput()
+	root := stageInstall(t)
+	visudo := needTool(t, "visudo")
+	p := filepath.Join(root, "/etc/sudoers.d/yunirun")
+	out, err := exec.Command(visudo, "-c", "-f", p).CombinedOutput()
 	if err != nil {
 		t.Fatalf("visudo が拒否した: %s", out)
 	}
@@ -78,9 +100,7 @@ func TestInstallDoesNotRewriteUnchangedFiles(t *testing.T) {
 	if err := os.WriteFile(src, []byte(testConfigJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exec.LookPath("visudo"); err != nil {
-		t.Skip("visudo が無い")
-	}
+	needTool(t, "visudo")
 	root := filepath.Join(dir, "root")
 	args := []string{"--root", root, "--from", src}
 	if err := runInstall(context.Background(), args); err != nil {
@@ -147,13 +167,18 @@ func ephemeral(p string) bool {
 	return false
 }
 
-// --root / で NixOS の拒否を迂回できてはいけない。
-func TestInstallTreatsRootSlashAsRealInstall(t *testing.T) {
-	if _, err := os.Stat("/etc/NIXOS"); err != nil {
-		t.Skip("NixOS でのみ意味がある")
+// NixOS では断るという判断を --root / で迂回できてはいけない。
+func TestRootSlashIsNotStaging(t *testing.T) {
+	for _, flag := range []string{"", "/", "//", "///"} {
+		if _, staging := stagingRoot(flag); staging {
+			t.Errorf("--root %q を staging と見なしている", flag)
+		}
 	}
-	if err := runInstall(context.Background(), []string{"--root", "/"}); err == nil {
-		t.Fatal("--root / で NixOS の拒否を迂回できた")
+	for _, flag := range []string{"/srv/stage", "/srv/stage/"} {
+		root, staging := stagingRoot(flag)
+		if !staging || root != "/srv/stage" {
+			t.Errorf("--root %q → %q staging=%v", flag, root, staging)
+		}
 	}
 }
 
@@ -162,11 +187,9 @@ func TestInstallTreatsRootSlashAsRealInstall(t *testing.T) {
 // 書式の誤りは起動して初めて分かることが多く、しかもそのときには
 // 「なぜか動かない unit」として現れる。
 func TestInstallWritesUnitsSystemdAccepts(t *testing.T) {
-	analyze, err := exec.LookPath("systemd-analyze")
-	if err != nil {
-		t.Skip("systemd-analyze が無い")
-	}
-	dir := filepath.Join(stageInstall(t), "/etc/systemd/system")
+	root := stageInstall(t)
+	analyze := needTool(t, "systemd-analyze")
+	dir := filepath.Join(root, "/etc/systemd/system")
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
