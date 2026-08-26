@@ -357,6 +357,27 @@ in
       issuer = "https://token.actions.githubusercontent.com";
     }) cfg.apps;
 
+    # アプリごとの資源を出す口。
+    #
+    # cgroup を読むだけなので追加のコンテナが要らない。ホスト全体の指標では
+    # 「どのアプリが食っているか」が分からず、切り分けに時間がかかる。
+    systemd.services.yunirun-usage = lib.mkIf cfg.observability.enable {
+      description = "yunirun: アプリごとの資源使用を出す";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "yunirun-converge.service" ];
+      path = [ pkg ];
+      serviceConfig = {
+        ExecStart = "${pkg}/bin/yunirun usage";
+        Restart = "always";
+        RestartSec = "10s";
+        # 読むのは cgroup と台帳だけ。書くものは無い。
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        NoNewPrivileges = true;
+      };
+    };
+
     systemd.tmpfiles.rules = [
       # stateDir には台帳と秘密が入るので root 専用。
       "d ${cfg.stateDir} 0700 root root -"
