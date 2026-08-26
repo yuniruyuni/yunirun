@@ -1,8 +1,11 @@
 package system
 
 import (
+	"bytes"
 	"context"
+	"filippo.io/age"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -147,45 +150,69 @@ func TestEnsureDatabaseConnectsToTheAppsOwnSocket(t *testing.T) {
 	}
 }
 
-func TestVaultPutSendsValueOnStdinNotArgv(t *testing.T) {
-	r := &fakeRunner{out: []byte("ciphertext")}
-	v := Vault{Dir: t.TempDir(), HostRecipient: "age1host", AdminRecipient: "age1admin", Runner: r}
-	const secret = "PLAINTEXTVALUE"
-	if err := v.Put(context.Background(), "fighter-db-owner", secret); err != nil {
-		t.Fatal(err)
-	}
-	if r.argvContains(secret) {
-		t.Fatalf("値が argv に載っている: %+v", r.calls)
-	}
-	if r.calls[0].stdin != secret {
-		t.Fatal("stdin から渡されていない")
-	}
-}
-
 // ホストを失っても復旧できるよう、管理者鍵にも必ず暗号化する。
+// 宛先に入っているかではなく、宛先に入っているかではなく
+// 管理者鍵で実際に開けるところまで見る。
 func TestVaultPutAlsoEncryptsToAdminRecipient(t *testing.T) {
-	r := &fakeRunner{out: []byte("ciphertext")}
-	v := Vault{Dir: t.TempDir(), HostRecipient: "age1host", AdminRecipient: "age1admin", Runner: r}
+	host, admin := newIdentityFile(t), newIdentityFile(t)
+	v := Vault{Dir: t.TempDir(), HostKeyPath: host.path, HostRecipient: host.pub, AdminRecipient: admin.pub}
 	if err := v.Put(context.Background(), "x", "v"); err != nil {
 		t.Fatal(err)
 	}
-	if !r.argvContains("age1admin") {
-		t.Fatalf("管理者鍵が受信者に入っていない: %+v", r.calls[0].args)
+	ct, err := os.ReadFile(v.Path("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, key := range map[string]string{"ホスト鍵": host.path, "管理者鍵": admin.path} {
+		got, err := Decrypt(ct, key)
+		if err != nil {
+			t.Fatalf("%s で開けない: %v", name, err)
+		}
+		if string(got) != "v" {
+			t.Errorf("%s: %q", name, got)
+		}
 	}
 }
 
 // 作り直すと DB 側のパスワードと食い違う。converge から繰り返し呼ばれる。
 func TestVaultPutIsIdempotent(t *testing.T) {
-	r := &fakeRunner{out: []byte("ciphertext")}
-	v := Vault{Dir: t.TempDir(), HostRecipient: "age1host", Runner: r}
-	for i := 0; i < 3; i++ {
+	host := newIdentityFile(t)
+	v := Vault{Dir: t.TempDir(), HostKeyPath: host.path, HostRecipient: host.pub}
+	if err := v.Put(context.Background(), "x", "v"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(v.Path("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
 		if err := v.Put(context.Background(), "x", "v"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(r.calls) != 1 {
-		t.Fatalf("2 回目以降も暗号化している: %d 回", len(r.calls))
+	after, err := os.ReadFile(v.Path("x"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	// 暗号化は毎回異なる出力になるので、同一なら書き直していない。
+	if !bytes.Equal(first, after) {
+		t.Fatal("2 回目以降も暗号化している")
+	}
+}
+
+type identityFile struct{ path, pub string }
+
+func newIdentityFile(t *testing.T) identityFile {
+	t.Helper()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "key.txt")
+	if err := os.WriteFile(p, []byte(id.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return identityFile{path: p, pub: id.Recipient().String()}
 }
 
 func TestNamesForDerivesEverythingFromAppName(t *testing.T) {

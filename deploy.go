@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -220,9 +221,9 @@ func runMigrateStep(ctx context.Context, r system.Runner, c stepCtx) error {
 
 func waitHealthy(ctx context.Context, port int, path string) error {
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
-	r := system.ExecRunner{}
+	client := &http.Client{Timeout: 3 * time.Second}
 	for i := 0; i < 60; i++ {
-		if _, err := r.Run(ctx, nil, "curl", "-fsS", "--max-time", "3", url); err == nil {
+		if healthy(ctx, client, url) {
 			return nil
 		}
 		select {
@@ -232,6 +233,24 @@ func waitHealthy(ctx context.Context, port int, path string) error {
 		}
 	}
 	return fmt.Errorf("%s が応答しません", url)
+}
+
+// healthy は 1 度だけ叩いて 2xx かどうかを返す。
+//
+// 応答が来ないのは待っている間の常態なので、誤りとして扱わない。
+func healthy(ctx context.Context, client *http.Client, url string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	// 本文は読まずに捨てるが、閉じないと接続が残る。
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, res.Body)
+	return res.StatusCode >= 200 && res.StatusCode < 300
 }
 
 // imageRef は image の完全な参照を組み立てる。

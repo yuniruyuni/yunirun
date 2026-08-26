@@ -11,7 +11,6 @@ package main
 // 揃っているかどうかを converge 側から知りようがなかった。
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,7 +117,7 @@ func adoptAppSecrets(cfg *config.Config, app string) error {
 }
 
 // loadAppSecrets は保存してある暗号文を復号して返す。
-func loadAppSecrets(ctx context.Context, r system.Runner, cfg *config.Config, app string) (map[string]string, error) {
+func loadAppSecrets(cfg *config.Config, app string) (map[string]string, error) {
 	dir := appSecretsDir(cfg, app)
 	ents, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -142,7 +141,7 @@ func loadAppSecrets(ctx context.Context, r system.Runner, cfg *config.Config, ap
 		if err != nil {
 			return nil, err
 		}
-		v, err := r.Run(ctx, b, "age", "-d", "-i", key)
+		v, err := system.Decrypt(b, key)
 		if err != nil {
 			return nil, fmt.Errorf("%s の秘密 %s を復号できません: %w", app, name, err)
 		}

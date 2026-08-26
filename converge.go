@@ -63,7 +63,7 @@ func runConverge(ctx context.Context, args []string) error {
 		return err
 	}
 
-	hostRecipient, err2 := hostAgeRecipient(ctx, r, cfg)
+	hostRecipient, err2 := hostAgeRecipient(cfg)
 	if err2 != nil {
 		return err2
 	}
@@ -240,7 +240,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 
 	// アプリ側 (secrets/<ENV>.age) に置く方式。deploy が暗号文のまま運び、
 	// ここで初めて復号する。
-	appSecrets, err := loadAppSecrets(ctx, r, cfg, name)
+	appSecrets, err := loadAppSecrets(cfg, name)
 	if err != nil {
 		return render.App{}, err
 	}
@@ -257,7 +257,6 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 			HostKeyPath:    cfg.HostKeyPath,
 			HostRecipient:  hostRecipient,
 			AdminRecipient: cfg.AdminRecipient,
-			Runner:         r,
 		}
 		owner, app, err := resolveDBPasswords(ctx, vault, names, m.App.DatabasePasswords)
 		if err != nil {
@@ -587,13 +586,15 @@ func ensureInbox(app string, a alloc.Alloc) error {
 	return os.Chown(d, a.UID, a.GID)
 }
 
-// hostAgeRecipient は ssh のホスト鍵から導いた age 公開鍵を返す。
-func hostAgeRecipient(ctx context.Context, r system.Runner, cfg *config.Config) (string, error) {
-	out, err := r.Run(ctx, nil, "age-keygen", "-y", cfg.HostKeyPath)
+// hostAgeRecipient はホスト鍵に対応する age 公開鍵を返す。
+//
+// 鍵は agenix が置く age の identity ファイル。ssh のホスト鍵ではない。
+func hostAgeRecipient(cfg *config.Config) (string, error) {
+	pub, err := system.Recipient(cfg.HostKeyPath)
 	if err != nil {
 		return "", fmt.Errorf("ホスト鍵から公開鍵を導けません: %w", err)
 	}
-	return trimLine(string(out)), nil
+	return pub, nil
 }
 
 func trimLine(s string) string {

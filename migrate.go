@@ -14,6 +14,10 @@ import (
 )
 
 // migrateTimeout は schema 適用の上限。
+//
+// timeout(1) ではなく podman 自身に渡す。外側から podman を殺しても、
+// コンテナを抱える conmon は生き残って走り続けてしまう (実際に置き去りを
+// 作った)。--timeout ならコンテナそのものが止まる。
 const migrateTimeout = "600"
 
 // runMigrate は schema を適用する。root で動く。
@@ -94,6 +98,8 @@ func runMigrate(ctx context.Context, args []string) error {
 
 	args2 := []string{
 		"run", "--rm",
+		// 上限を過ぎたらコンテナごと落とす。
+		"--timeout", migrateTimeout,
 		// owner パスワードは root しか読めないファイルから読む。
 		"--env-file", cfg.EnvPath(app, "migration.env"),
 		// DB へは TCP ではなく Unix ソケットで繋ぐ。渡すのはこのアプリ専用
@@ -109,7 +115,7 @@ func runMigrate(ctx context.Context, args []string) error {
 	args2 = append(args2, w.Args...)
 	args2 = append(args2, image+":"+tag)
 
-	out, err := r.Run(ctx, nil, "timeout", append([]string{migrateTimeout, "podman"}, args2...)...)
+	out, err := r.Run(ctx, nil, "podman", args2...)
 	fmt.Print(string(out))
 	if err != nil {
 		return fmt.Errorf("schema の適用に失敗しました: %w", err)
