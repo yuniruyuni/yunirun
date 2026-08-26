@@ -435,12 +435,13 @@ func TestTempoIsInTheGroupThatGuardsItsOwnSocket(t *testing.T) {
 // 「見ているつもりで見ていない」状態に戻る。
 func TestAlertRulesCoverDiskAndBackup(t *testing.T) {
 	want := map[string]bool{
-		"yunirun-origin-down":    false,
-		"yunirun-replica-down":   false,
-		"yunirun-backend-errors": false,
-		"yunirun-metrics-blind":  false,
-		"yunirun-disk-low":       false,
-		"yunirun-backup-stale":   false,
+		"yunirun-origin-down":     false,
+		"yunirun-replica-down":    false,
+		"yunirun-backend-errors":  false,
+		"yunirun-metrics-blind":   false,
+		"yunirun-disk-low":        false,
+		"yunirun-backup-stale":    false,
+		"yunirun-textfile-broken": false,
 	}
 	for _, r := range alertRules() {
 		if _, ok := want[r.UID]; !ok {
@@ -469,6 +470,20 @@ func TestBackupAlertWatchesAbsenceOfSuccessNotFailure(t *testing.T) {
 	// 指標そのものが消えるのも「取れていない」の一種。黙らせてはいけない。
 	if r.NoData != "Alerting" {
 		t.Errorf("指標が消えたときに黙る: noDataState=%s", r.NoData)
+	}
+}
+
+// 置き場のファイルが 1 つ壊れると、その系列だけが黙って消える。他の系列が
+// 健在なら無データにもならないので、見張っているつもりの値が欠けたまま
+// 何事も無いように見える。実際に HELP の文言の食い違いで踏んだ。
+func TestBrokenTextfileIsItselfAnAlert(t *testing.T) {
+	r := ruleByUID(t, "yunirun-textfile-broken")
+	if !strings.Contains(r.Expr, "node_textfile_scrape_error") {
+		t.Errorf("取り込みの失敗を見ていない: %s", r.Expr)
+	}
+	// 1 つでも壊れていれば拾う。平均や合計だと薄まる。
+	if !strings.HasPrefix(r.Expr, "max(") {
+		t.Errorf("1 つでも壊れていれば拾う形になっていない: %s", r.Expr)
 	}
 }
 

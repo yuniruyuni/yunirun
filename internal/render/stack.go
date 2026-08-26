@@ -588,6 +588,20 @@ func alertRules() []alertRule {
 			NoData: "Alerting",
 		},
 		{
+			UID: "yunirun-textfile-broken", Title: "指標の取り込みに失敗している",
+			// 置き場のファイルが 1 つでも壊れると、その系列だけが黙って消える。
+			// 消えた系列は max by (...) の対象から外れるだけなので、他の系列が
+			// 健在なら「無データ」にもならず、何事も無いように見える。
+			//
+			// 実際に踏んだ: HELP の文言が他のファイルと食い違っていただけで
+			// node exporter が解析に失敗し、その系列だけが出なくなった。
+			// バックアップの見張りがそのまま効かなくなる。
+			Expr: `max(node_textfile_scrape_error)`,
+			Op:   "gt", Threshold: "0", For: "10m", Severity: "warning",
+			Summary: "指標ファイルの取り込みに失敗している (見張っている値が欠けている可能性がある)",
+			NoData:  "NoData",
+		},
+		{
 			UID: "yunirun-metrics-blind", Title: "計測が届いていない",
 			Expr: `up{job="haproxy"}`,
 			Op:   "lt", Threshold: "1", For: "5m", Severity: "critical",
