@@ -114,14 +114,34 @@ func TestContainerUnitIncludesDeclaredEnv(t *testing.T) {
 
 // 秘密は EnvironmentFile 経由で渡す。unit に値が出ると、unit を読める相手に
 // 秘密が渡る。
+//
+// マニフェストに書けるのは秘密でない env だけなので、unit を作る側は秘密を
+// 受け取りようがない。ここで見るのは、その受け口が実際に張られていること。
 func TestContainerUnitKeepsSecretsOutOfTheUnitFile(t *testing.T) {
 	a := sample()
-	m, _ := manifest.Parse([]byte(`{"app":{"secrets":{"TOKEN":"some-secret"}}}`))
+	m, err := manifest.Parse([]byte(`{"app":{"env":{"PUBLIC_URL":"https://x.example"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	a.Manifest = m
 	got := ContainerUnit(a, "blue")
-	// 秘密の名前すら unit には出さない (値は当然出さない)。
-	if strings.Contains(got, "TOKEN=") {
-		t.Fatalf("秘密が unit に現れている:\n%s", got)
+	if !strings.Contains(got, "EnvironmentFile=") {
+		t.Fatalf("秘密の受け口が無い:\n%s", got)
+	}
+	// unit に現れてよいのは宣言した秘密でない env だけ。
+	for _, line := range strings.Split(got, "\n") {
+		v, ok := strings.CutPrefix(strings.TrimSpace(line), "Environment=")
+		if !ok {
+			continue
+		}
+		name, _, _ := strings.Cut(v, "=")
+		switch name {
+		case "PUBLIC_URL", "PORT", "PGHOST", "PGPORT", "DB_USER", "DB_NAME",
+			"DB_APP_NAME", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL",
+			"OTEL_EXPORTER_OTLP_INSECURE", "OTEL_SERVICE_NAME", "OTEL_TRACES_EXPORTER":
+		default:
+			t.Errorf("宣言していない値が unit に出ている: %s", line)
+		}
 	}
 }
 
@@ -249,23 +269,27 @@ func TestWorkloadUnitCarriesTheAppEnvironment(t *testing.T) {
 	}
 }
 
-// 秘密はここに現れてはいけない。unit ファイルは平文で置かれる。
+// 秘密は unit ファイルに現れてはいけない。unit は平文で置かれる。
+//
+// 秘密は EnvironmentFile= の先へ入る。宣言できるのは秘密でない env だけで、
+// そちらは unit に出てよい。
 func TestWorkloadUnitKeepsSecretsInTheEnvFile(t *testing.T) {
 	a := App{
 		Name:   "fighter",
 		DBName: "fighter",
 		Manifest: &manifest.Manifest{App: manifest.App{
-			Secrets: map[string]string{"TOKEN": "fighter-token"},
+			Env: map[string]string{"PUBLIC_URL": "https://fighter.example"},
 		}},
 	}
 	out := WorkloadUnit(a, "cleanup", WorkloadSpec{
 		Image: "x", DBUser: "fighter_app", EnvFile: "/run/yunirun/fighter/runtime.env",
 	})
-	if strings.Contains(out, "TOKEN") {
-		t.Fatalf("秘密の名前が unit に出ている:\n%s", out)
-	}
+	// 秘密の入り口はこれだけ。無いと秘密を渡す手段が unit しか無くなる。
 	if !strings.Contains(out, "EnvironmentFile=/run/yunirun/fighter/runtime.env") {
 		t.Fatalf("EnvironmentFile が無い:\n%s", out)
+	}
+	if !strings.Contains(out, "Environment=PUBLIC_URL=https://fighter.example") {
+		t.Fatalf("秘密でない env が unit に出ていない:\n%s", out)
 	}
 }
 

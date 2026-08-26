@@ -226,20 +226,8 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	// アプリ固有の秘密を集める。
 	runtimeEnvVars := map[string]string{}
 
-	// infra 側 (agenix) に置く旧方式。アプリは名前だけを宣言する。
-	// アプリ側 (secrets/<ENV>.age) へ移行済みのものはここに現れない。
-	for envName, secretName := range m.App.Secrets {
-		v, err := os.ReadFile(filepath.Join("/run/agenix", secretName))
-		if err != nil {
-			return render.App{}, fmt.Errorf("秘密 %s を読めません: %w", secretName, err)
-		}
-		// 末尾改行を落とす。agenix の値に乗っていることがあり、環境変数へ
-		// そのまま入ると認証などが静かに失敗する。
-		runtimeEnvVars[envName] = strings.TrimRight(string(v), "\r\n")
-	}
-
-	// アプリ側 (secrets/<ENV>.age) に置く方式。deploy が暗号文のまま運び、
-	// ここで初めて復号する。
+	// 秘密はアプリ側 (secrets/<ENV>.age) に暗号文として置く。deploy が
+	// そのまま運び、ここで初めて復号する。
 	appSecrets, err := loadAppSecrets(cfg, name)
 	if err != nil {
 		return render.App{}, err
@@ -258,7 +246,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 			HostRecipient:  hostRecipient,
 			AdminRecipient: cfg.AdminRecipient,
 		}
-		owner, app, err := resolveDBPasswords(ctx, vault, names, m.App.DatabasePasswords)
+		owner, app, err := ensureDBPasswords(ctx, vault, names)
 		if err != nil {
 			return render.App{}, err
 		}
@@ -410,37 +398,6 @@ func workloadSpec(cfg *config.Config, app, name string, w manifest.Workload,
 
 func repoOwner(cfg *config.Config, app string) string {
 	return strings.SplitN(cfg.Apps[app], "/", 2)[0]
-}
-
-// resolveDBPasswords は使う DB パスワードを決める。
-//
-// 既存の秘密が指定されていればそれを使い、無ければ生成する。指定する用途は
-// 移行期間中に旧システムと DB を共有する場合。パスワードを変えると旧側の
-// 稼働中コンテナが即座に認証に失敗する。
-func resolveDBPasswords(ctx context.Context, v system.Vault, n system.DBNames,
-	existing map[string]string) (owner, app string, err error) {
-
-	if len(existing) == 0 {
-		return ensureDBPasswords(ctx, v, n)
-	}
-	read := func(role string) (string, error) {
-		name, ok := existing[role]
-		if !ok {
-			return "", fmt.Errorf("databasePasswords に %s がありません", role)
-		}
-		b, err := os.ReadFile(filepath.Join("/run/agenix", name))
-		if err != nil {
-			return "", fmt.Errorf("秘密 %s を読めません: %w", name, err)
-		}
-		return strings.TrimRight(string(b), "\r\n"), nil
-	}
-	if owner, err = read(manifest.RoleOwner); err != nil {
-		return "", "", err
-	}
-	if app, err = read(manifest.RoleApp); err != nil {
-		return "", "", err
-	}
-	return owner, app, nil
 }
 
 func ensureDBPasswords(ctx context.Context, v system.Vault, n system.DBNames) (owner, app string, err error) {
@@ -766,7 +723,7 @@ func ensureDatabaseContainer(ctx context.Context, r system.Runner, cfg *config.C
 	conn := system.Conn{SocketDir: sockDir, Owner: n.Owner, Password: ownerPassword}
 	// 初回は initdb が走るぶん時間がかかる。待たずに続けると、収束のたびに
 	// 「たまたま間に合ったか」で結果が変わる。
-	if err := system.WaitReady(ctx, r, conn, dbReadyTries); err != nil {
+	if err := system.WaitReady(ctx, r, conn, n.Database, dbReadyTries); err != nil {
 		return system.Conn{}, err
 	}
 	return conn, nil
