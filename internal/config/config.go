@@ -89,9 +89,21 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	c, err := Parse(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
+}
+
+// Parse は設定として読めるかを確かめる。
+//
+// install が、所定の位置へ複写する前に中身を見るのに使う。壊れたものを
+// 置いてから converge が落ちるより、置く前に断る方が分かりやすい。
+func Parse(b []byte) (*Config, error) {
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, fmt.Errorf("%s を読めません: %w", path, err)
+		return nil, err
 	}
 	if err := c.validate(); err != nil {
 		return nil, err

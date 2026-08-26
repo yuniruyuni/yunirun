@@ -1,0 +1,187 @@
+package main
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const testConfigJSON = `{"domain":"example.test","stateDir":"/var/lib/yunirun",
+"hostKeyPath":"/k","secretsKeyPath":"/s","homesDir":"/var/lib/yunirun-apps",
+"dbDir":"/var/lib/yunirun-db","envDir":"/var/lib/yunirun-env",
+"observability":{"enable":true,"dir":"/var/lib/yunirun-obs"},
+"apps":{"blog":"someone/blog"}}`
+
+func stageInstall(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("visudo"); err != nil {
+		t.Skip("visudo が無いので sudoers を検査できない")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(src, []byte(testConfigJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "root")
+	err := runInstall(context.Background(), []string{"--root", root, "--from", src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestInstallPlacesEverythingTheModuleDoes(t *testing.T) {
+	root := stageInstall(t)
+	for _, p := range []string{
+		"/etc/yunirun/config.json",
+		"/etc/systemd/system/yunirun-converge.service",
+		"/etc/systemd/system/yunirun-migrate@.service",
+		"/etc/systemd/system/yunirun-usage.service",
+		"/etc/tmpfiles.d/yunirun.conf",
+		"/etc/sudoers.d/yunirun",
+	} {
+		if _, err := os.Stat(filepath.Join(root, p)); err != nil {
+			t.Errorf("%s が置かれていない", p)
+		}
+	}
+}
+
+// 壊れた sudoers を置くと sudo 全体が使えなくなり、直す手段まで失う。
+// visudo に通るものだけを置く。
+func TestInstallWritesSudoersThatVisudoAccepts(t *testing.T) {
+	p := filepath.Join(stageInstall(t), "/etc/sudoers.d/yunirun")
+	out, err := exec.Command("visudo", "-c", "-f", p).CombinedOutput()
+	if err != nil {
+		t.Fatalf("visudo が拒否した: %s", out)
+	}
+}
+
+func TestInstallLeavesSudoersOwnerReadOnly(t *testing.T) {
+	p := filepath.Join(stageInstall(t), "/etc/sudoers.d/yunirun")
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o440 {
+		t.Errorf("モードが %04o", fi.Mode().Perm())
+	}
+}
+
+// converge から繰り返し呼ばれても書き換えないこと。書き換えると systemd が
+// 変更を検知して無用な再起動を招く。
+func TestInstallDoesNotRewriteUnchangedFiles(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(src, []byte(testConfigJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath("visudo"); err != nil {
+		t.Skip("visudo が無い")
+	}
+	root := filepath.Join(dir, "root")
+	args := []string{"--root", root, "--from", src}
+	if err := runInstall(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	unit := filepath.Join(root, "/etc/systemd/system/yunirun-converge.service")
+	fi, err := os.Stat(unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(unit, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	before := fi.ModTime()
+	if err := runInstall(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before) {
+		t.Error("内容が同じなのに書き換えている")
+	}
+}
+
+// 壊れた設定を置いてから converge が落ちるより、置く前に断る方が分かりやすい。
+func TestInstallRejectsUnreadableConfig(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "config.json")
+	// domain が空。validate が弾く。
+	if err := os.WriteFile(src, []byte(`{"stateDir":"/var/lib/yunirun"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "root")
+	err := runInstall(context.Background(), []string{"--root", root, "--from", src})
+	if err == nil {
+		t.Fatal("壊れた設定が通った")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "/etc/yunirun/config.json")); statErr == nil {
+		t.Error("断ったのに置いている")
+	}
+}
+
+// unit の ExecStart は自分自身を指す。消えうる場所のまま据え付けると、
+// 再起動後に起動しない unit ができる。
+func TestSelfPathRejectsEphemeralLocations(t *testing.T) {
+	for _, p := range []string{"/tmp/yunirun", "/run/x/yunirun", "/var/tmp/yunirun"} {
+		if !ephemeral(p) {
+			t.Errorf("%s を消えうる場所と見なしていない", p)
+		}
+	}
+	if ephemeral("/usr/local/bin/yunirun") {
+		t.Error("/usr/local/bin を消えうる場所と見なしている")
+	}
+}
+
+func ephemeral(p string) bool {
+	for _, bad := range ephemeralPrefixes {
+		if strings.HasPrefix(p, bad) {
+			return true
+		}
+	}
+	return false
+}
+
+// --root / で NixOS の拒否を迂回できてはいけない。
+func TestInstallTreatsRootSlashAsRealInstall(t *testing.T) {
+	if _, err := os.Stat("/etc/NIXOS"); err != nil {
+		t.Skip("NixOS でのみ意味がある")
+	}
+	if err := runInstall(context.Background(), []string{"--root", "/"}); err == nil {
+		t.Fatal("--root / で NixOS の拒否を迂回できた")
+	}
+}
+
+// systemd が受け取れる形になっているか、systemd 自身に確かめさせる。
+//
+// 書式の誤りは起動して初めて分かることが多く、しかもそのときには
+// 「なぜか動かない unit」として現れる。
+func TestInstallWritesUnitsSystemdAccepts(t *testing.T) {
+	analyze, err := exec.LookPath("systemd-analyze")
+	if err != nil {
+		t.Skip("systemd-analyze が無い")
+	}
+	dir := filepath.Join(stageInstall(t), "/etc/systemd/system")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		out, err := exec.Command(analyze, "verify", "--no-pager", filepath.Join(dir, e.Name())).CombinedOutput()
+		// ExecStart の実体や依存する target の有無まで見られると、環境に
+		// よって落ちる。書式の誤りだけを問題にする。
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "Failed to parse") ||
+				strings.Contains(line, "Unknown key") ||
+				strings.Contains(line, "Invalid ") {
+				t.Errorf("%s: %s", e.Name(), line)
+			}
+		}
+		_ = err
+	}
+}

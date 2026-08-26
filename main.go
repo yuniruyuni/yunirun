@@ -22,6 +22,8 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "install":
+		err = runInstall(ctx, os.Args[2:])
 	case "converge":
 		err = runConverge(ctx, os.Args[2:])
 	case "deploy":
@@ -62,6 +64,11 @@ var version = "dev"
 
 func usage() {
 	fmt.Fprint(os.Stderr, `yunirun - VPS 上でコンテナ化したアプリを動かす
+
+  yunirun install [--config PATH] [--from PATH] [--dry-run]
+      NixOS 以外のホストへ据え付ける。root で実行する。
+      unit・ディレクトリ・sudo の許可を置く。NixOS では宣言と競合するので
+      断る。アプリを作るのは converge の仕事で、ここではやらない。
 
   yunirun converge [--config PATH]
       宣言されたアプリ一覧に実体を一致させる。root で実行する。

@@ -142,11 +142,41 @@ private リポジトリでも認証情報を置かずに済む。
 
 | | 実行主体 | 頻度 | 内容 |
 |---|---|---|---|
+| `yunirun install` | root | 据え付け時 | NixOS 以外のホストへ unit と許可を置く |
 | `yunirun converge` | root | 設定変更時 | 宣言されたアプリ一覧に実体を一致させる |
 | `yunirun deploy <sha>` | アプリの deploy ユーザ | push ごと | pull → schema 適用 → blue/green 入替 |
 
 `converge` は冪等な収束操作。`yunirun` 自体が宣言的なので、NixOS の外に出ても
 状態が追えなくならない。
+
+## NixOS 以外のホストへ据え付ける
+
+NixOS ではモジュールが unit とディレクトリと sudo の許可を宣言として持って
+いる。それが無いホストでは `install` が同じものを置く。
+
+```sh
+# 何が置かれるかを見る
+yunirun install --from ./config.json --dry-run
+
+# 据え付ける
+sudo yunirun install --from ./config.json
+```
+
+`--root DIR` を付けると、その下に置くだけで systemd への反映は行わない。
+イメージを組む際の staging に使える。
+
+unit の `ExecStart` は実行した `yunirun` 自身を指す。消えうる場所 (`/tmp` など)
+に居るまま据え付けようとすると断る。再起動後に起動しない unit ができるため。
+移動したら `install` をやり直す。
+
+NixOS では宣言と競合するので断る。そちらでは `services.yunirun` を使う。
+
+置くのはここまでで、アプリを作るのは `converge` の仕事。deploy を許す認可
+(opkssh など) は別に用意する必要がある。
+
+**前提**: `podman` / `systemd` / `sudo` / `visudo` / `postgresql-client` が
+入っていること。`install` は壊れた `sudoers` を置かないよう、置く前に
+`visudo` に検査させる。
 
 schema の適用は provision ではなく deploy 側にある。デプロイのたびに必要なため。
 
