@@ -182,13 +182,25 @@ NixOS では宣言と競合するので断る。そちらでは `services.yuniru
 置くのはここまでで、アプリを作るのは `converge` の仕事。deploy を許す認可
 (opkssh など) は別に用意する必要がある。
 
-**前提**: `podman` / `systemd` / `sudo` / `visudo` / `postgresql-client` が
-入っていること。`install` は壊れた `sudoers` を置かないよう、置く前に
-`visudo` に検査させる。
+**前提**: `podman` / `systemd` (logind 込み) / `sudo` / `visudo` /
+`postgresql-client` / `pam_systemd.so` (Debian 系は `libpam-systemd`) と、
+rootless podman に要る `uidmap`。`install` が据え付ける前に検査して、
+足りないものをまとめて挙げる。
 
-Debian 13 (systemd 257) のコンテナで、置く・ディレクトリを作る・unit を
-有効にする・`yunirun usage` が動いて `/metrics` を返す、まで通してある。
-`converge` まではその環境では通せない (logind と入れ子の podman が無い)。
+`pam_systemd.so` が要るのは、アプリが rootless の user unit として動くため。
+無いと `XDG_RUNTIME_DIR` が設定されず `user@<uid>.service` が起動しない。
+`converge` からは「systemd が起動しません」としか見えないので、先に検査する。
+
+Debian 13 (systemd 257) で `install` から `converge` まで通してある。
+
+| 確かめたこと | |
+|---|---|
+| アプリユーザ | 作成・`linger` 有効・`user@<uid>.service` が active |
+| subuid/subgid | `yunirun-blog:4000000:65536` |
+| rootless の unit | `blog-blue.container` / `blog-green.container` |
+| HAProxy | active。backend 未配備なので frontend は 503 |
+| DB | コンテナが active、`blog` (owner) と `blog_app` を作成 |
+| 秘密 | 生成して age で暗号化し、`yunirun databases` で復号できる |
 
 schema の適用は provision ではなく deploy 側にある。デプロイのたびに必要なため。
 

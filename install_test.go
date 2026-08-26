@@ -258,3 +258,40 @@ func TestPrereqsReportsMissingKeys(t *testing.T) {
 		t.Errorf("何が足りないか言っていない: %v", err)
 	}
 }
+
+// 無いと user@<uid>.service が XDG_RUNTIME_DIR is not set で落ちる。
+// converge からは「systemd が起動しません」としか見えず、真因が埋もれる。
+// Debian で実際にここで詰まった。
+func TestPAMSystemdIsAPrerequisite(t *testing.T) {
+	// この環境に在るなら、探し方が正しいことの確認になる。
+	found := hasPAMSystemd()
+	real := false
+	for _, g := range []string{
+		"/usr/lib/*/security/pam_systemd.so",
+		"/usr/lib64/security/pam_systemd.so",
+		"/usr/lib/security/pam_systemd.so",
+		"/lib/*/security/pam_systemd.so",
+	} {
+		if m, _ := filepath.Glob(g); len(m) > 0 {
+			real = true
+		}
+	}
+	if real != found {
+		t.Fatalf("探し方が実態と合っていない: 在る=%v 見つけた=%v", real, found)
+	}
+	if os.Getenv("CI") != "" && !found {
+		t.Skip("CI の環境に pam_systemd.so が無い")
+	}
+}
+
+// 前提の一覧に挙がっていないと、Debian で踏んだのと同じ形で詰まる。
+func TestPrereqsMentionsPAMSystemd(t *testing.T) {
+	if hasPAMSystemd() {
+		t.Skip("この環境には在るので、欠けたときの文言を確かめられない")
+	}
+	cfg := &config.Config{Domain: "x.test", StateDir: "/var/lib/yunirun"}
+	err := checkPrereqs(cfg, false)
+	if err == nil || !strings.Contains(err.Error(), "pam_systemd") {
+		t.Errorf("pam_systemd に触れていない: %v", err)
+	}
+}
