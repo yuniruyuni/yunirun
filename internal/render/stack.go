@@ -107,6 +107,11 @@ func (s StackSpec) TempoConfig() string {
 	var b strings.Builder
 	p := func(f string, v ...any) { fmt.Fprintf(&b, f+"\n", v...) }
 	p("server:")
+	// 既定は info。Tempo は取り込みや圧縮のたびに数行出し、それが 1 日
+	// 6,000 行を超えていた。しかもコンテナの stderr は journald が一律
+	// err として受けるので、info が err として積み上がる。本物の異常
+	// (1 日 97 行) がその中に埋もれる。
+	p("  log_level: warn")
 	p("  http_listen_address: 127.0.0.1")
 	p("  http_listen_port: %d", TempoPort)
 	// grpc も 127.0.0.1 に絞る。既定は全アドレスで、ホストのネットワークを

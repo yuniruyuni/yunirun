@@ -476,6 +476,15 @@ func TestBackupAlertWatchesAbsenceOfSuccessNotFailure(t *testing.T) {
 // 置き場のファイルが 1 つ壊れると、その系列だけが黙って消える。他の系列が
 // 健在なら無データにもならないので、見張っているつもりの値が欠けたまま
 // 何事も無いように見える。実際に HELP の文言の食い違いで踏んだ。
+// コンテナの stderr は journald が一律 err として受ける。既定の info のままだと
+// 1 日 6,000 行を超える info が err として積み上がり、本物の異常が埋もれる。
+func TestTempoDoesNotLogAtInfo(t *testing.T) {
+	cfg := spec().TempoConfig()
+	if !strings.Contains(cfg, "log_level: warn") {
+		t.Errorf("log_level が絞られていない:\n%s", cfg)
+	}
+}
+
 func TestBrokenTextfileIsItselfAnAlert(t *testing.T) {
 	r := ruleByUID(t, "yunirun-textfile-broken")
 	if !strings.Contains(r.Expr, "node_textfile_scrape_error") {
