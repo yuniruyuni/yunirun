@@ -1,7 +1,6 @@
 package render
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
@@ -405,79 +404,21 @@ func TestHAProxyLogsToStdoutBecauseThereIsNoDevLogInAContainer(t *testing.T) {
 	}
 }
 
-// パスの一部がそのまま資格情報になっている経路がある (StreamerPost の
-// /api/sse/widget/:token、FighterNotes の /s/:id)。要求行をそのまま残すと
-// それが journald へ平文で積まれる。実際に積まれていた。
-//
-// 経路 (HAProxy) は生のパスしか見えず、どこが秘密かを知る手立てが無いので、
-// アプリに宣言させて、そこだけを伏せる。
-func TestHAProxyRedactsOnlyTheDeclaredPaths(t *testing.T) {
-	m, err := manifest.Parse([]byte(
-		`{"app":{"redactPaths":["/api/sse/widget/","/s/"]}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := HAProxy([]App{{Name: "post", Manifest: m, Alloc: alloc.Alloc{Frontend: 8240}}})
-	for _, want := range []string{
-		"regsub(^/api/sse/widget/.+$,/api/sse/widget/*)",
-		"regsub(^/s/.+$,/s/*)",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("宣言した経路を伏せていない: %s\n%s", want, got)
-		}
-	}
-}
-
 // 経路ごと落とすと、どこへ届いたのかが全く分からなくなる。要求ログを
-// 持たないアプリでは、ここが唯一の情報源になる。
-func TestHAProxyStillLogsUndeclaredPaths(t *testing.T) {
-	m, err := manifest.Parse([]byte(`{"app":{}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := HAProxy([]App{{Name: "web", Manifest: m, Alloc: alloc.Alloc{Frontend: 8230}}})
-	// 宣言が無いアプリは、パスをそのまま置くだけ。
-	if !strings.Contains(got, "http-request set-var(txn.path) path\n") {
-		t.Errorf("経路を記録していない:\n%s", got)
-	}
-	if strings.Contains(got, "regsub") {
-		t.Errorf("宣言が無いのに伏せている:\n%s", got)
-	}
-	// 記録の形が変数を読んでいること。読んでいないと - になる。
-	if !strings.Contains(got, "%[var(txn.path)]") {
-		t.Errorf("記録の形が経路を読んでいない:\n%s", got)
-	}
-}
-
-// option httplog は要求行をそのまま含む。これがあると宣言が効かない。
-func TestHAProxyDoesNotUseTheDefaultHttpLog(t *testing.T) {
+// 持たないアプリ (costume / lom / web) では、ここが唯一の情報源になる。
+//
+// URL に秘密を載せない方針にしたので、伏せる仕組みは持たない。載せられない
+// 値はフラグメントへ置く (サーバへ送信されないので、どの記録にも現れない)。
+func TestHAProxyLogsWhereTheRequestLanded(t *testing.T) {
 	got := HAProxy(nil)
-	if strings.Contains(got, "option httplog") {
-		t.Fatalf("要求行を含む既定の形式を使っている:\n%s", got)
+	if !strings.Contains(got, "option httplog") {
+		t.Fatalf("要求を記録していない:\n%s", got)
 	}
-	for _, bad := range []string{"%HU", "%HP", "%HQ", "%{+Q}r"} {
-		if strings.Contains(got, bad) {
-			t.Errorf("伏せる前の経路を出す指定 %s が入っている", bad)
-		}
-	}
-	if regexp.MustCompile(`%r([^a-zA-Z]|$)`).MatchString(got) {
-		t.Error("要求行 (%r) が入っている")
-	}
-}
-
-// 手段まで失うと、アプリへ届かなかった要求 (503 や時間切れ) を追えなくなる。
-func TestHAProxyStillLogsWhatIsNeededToDiagnose(t *testing.T) {
-	got := HAProxy(nil)
-	for name, v := range map[string]string{
-		"どのアプリか":   "%ft",
-		"どの系へ振ったか": "%b/%s",
-		"状態":       "%ST",
-		"所要時間":     "%Ta",
-		"切れ方":      "%tsc",
-		"方法":       "%HM",
-	} {
-		if !strings.Contains(got, v) {
-			t.Errorf("%s (%s) が残っていない", name, v)
+	// 伏せる仕組みの残骸が無いこと。あると、守っているつもりで守っていない
+	// 場所ができる。
+	for _, gone := range []string{"regsub", "txn.path", "log-format"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("廃止した仕組みが残っている: %s", gone)
 		}
 	}
 }
