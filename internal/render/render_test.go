@@ -406,27 +406,58 @@ func TestHAProxyLogsToStdoutBecauseThereIsNoDevLogInAContainer(t *testing.T) {
 }
 
 // パスの一部がそのまま資格情報になっている経路がある (StreamerPost の
-// /api/sse/widget/:token、FighterNotes の /s/:id)。要求行を残すとそれが
-// journald に平文で積まれる。実際に積まれていた。
+// /api/sse/widget/:token、FighterNotes の /s/:id)。要求行をそのまま残すと
+// それが journald へ平文で積まれる。実際に積まれていた。
 //
-// yunirun はアプリの中身を知らないので、どの経路が秘密を含むかを判別
-// できない。判別できない以上、既定は「残さない」しかない。
-func TestHAProxyDoesNotLogTheRequestPath(t *testing.T) {
+// 経路 (HAProxy) は生のパスしか見えず、どこが秘密かを知る手立てが無いので、
+// アプリに宣言させて、そこだけを伏せる。
+func TestHAProxyRedactsOnlyTheDeclaredPaths(t *testing.T) {
+	m, err := manifest.Parse([]byte(
+		`{"app":{"redactPaths":["/api/sse/widget/","/s/"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := HAProxy([]App{{Name: "post", Manifest: m, Alloc: alloc.Alloc{Frontend: 8240}}})
+	for _, want := range []string{
+		"regsub(^/api/sse/widget/.+$,/api/sse/widget/*)",
+		"regsub(^/s/.+$,/s/*)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("宣言した経路を伏せていない: %s\n%s", want, got)
+		}
+	}
+}
+
+// 経路ごと落とすと、どこへ届いたのかが全く分からなくなる。要求ログを
+// 持たないアプリでは、ここが唯一の情報源になる。
+func TestHAProxyStillLogsUndeclaredPaths(t *testing.T) {
+	m, err := manifest.Parse([]byte(`{"app":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := HAProxy([]App{{Name: "web", Manifest: m, Alloc: alloc.Alloc{Frontend: 8230}}})
+	// 宣言が無いアプリは、パスをそのまま置くだけ。
+	if !strings.Contains(got, "http-request set-var(txn.path) path\n") {
+		t.Errorf("経路を記録していない:\n%s", got)
+	}
+	if strings.Contains(got, "regsub") {
+		t.Errorf("宣言が無いのに伏せている:\n%s", got)
+	}
+	// 記録の形が変数を読んでいること。読んでいないと - になる。
+	if !strings.Contains(got, "%[var(txn.path)]") {
+		t.Errorf("記録の形が経路を読んでいない:\n%s", got)
+	}
+}
+
+// option httplog は要求行をそのまま含む。これがあると宣言が効かない。
+func TestHAProxyDoesNotUseTheDefaultHttpLog(t *testing.T) {
 	got := HAProxy(nil)
-	// option httplog は要求行 (%{+Q}r) を含む。これがあると素通しになる。
 	if strings.Contains(got, "option httplog") {
 		t.Fatalf("要求行を含む既定の形式を使っている:\n%s", got)
 	}
-	if !strings.Contains(got, "log-format") {
-		t.Fatalf("記録の形を決めていない:\n%s", got)
-	}
-	// URI を出す指定が入っていないこと。
-	//
-	// %r (要求行そのもの) は、後ろに別の字が続く %rc などと紛れるので
-	// 単独で現れる場合だけを見る。
 	for _, bad := range []string{"%HU", "%HP", "%HQ", "%{+Q}r"} {
 		if strings.Contains(got, bad) {
-			t.Errorf("経路を出す指定 %s が入っている", bad)
+			t.Errorf("伏せる前の経路を出す指定 %s が入っている", bad)
 		}
 	}
 	if regexp.MustCompile(`%r([^a-zA-Z]|$)`).MatchString(got) {

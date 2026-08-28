@@ -178,3 +178,41 @@ func TestDatabaseNameRejectsUnsafeCharacters(t *testing.T) {
 		}
 	}
 }
+
+// この文字列は HAProxy の設定へ正規表現として埋め込まれる。緩めると
+// 設定そのものを書き換えられる。
+func TestRedactPathsRejectsAnythingThatCouldEscapeTheConfig(t *testing.T) {
+	for _, bad := range []string{
+		`/a),http-request return status 200 if { path /`, // 関数と行を閉じる
+		`/a b`,     // 空白で引数が切れる
+		`/a"b`,     // 引用符
+		`/a\nb`,    // 改行
+		`/a,b`,     // 引数の区切り
+		`/a(b`,     // 括弧
+		`relative`, // / で始まらない
+		``,
+	} {
+		src := `{"app":{"redactPaths":[` + mustJSON(bad) + `]}}`
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("受け入れてしまった: %q", bad)
+		}
+	}
+}
+
+func TestRedactPathsAcceptsOrdinaryPrefixes(t *testing.T) {
+	m, err := Parse([]byte(`{"app":{"redactPaths":["/api/sse/widget/","/s/"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.App.RedactPaths) != 2 {
+		t.Fatalf("読めていない: %+v", m.App.RedactPaths)
+	}
+}
+
+func mustJSON(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}

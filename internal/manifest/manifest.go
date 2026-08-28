@@ -57,6 +57,17 @@ type App struct {
 	// 書かなくてよい。
 	DatabaseName string `json:"databaseName"`
 
+	// RedactPaths は、その先を記録に残してはいけないパスの接頭辞。
+	//
+	// URL そのものが資格情報になっている経路のためにある。StreamerPost の
+	// /api/sse/widget/ や FighterNotes の /s/ がそれで、「推測できない URL で
+	// あること」が唯一のアクセス制御になっている。経路 (HAProxy) は生のパスしか
+	// 見えず、どこが秘密かを知る手立てが無いので、アプリが宣言する。
+	//
+	// 宣言された接頭辞の先は * に置き換えて記録される。宣言しなかった経路は
+	// そのまま残るので、どこへ届いたかは分かる。
+	RedactPaths []string `json:"redactPaths"`
+
 	// Database はこのアプリが PostgreSQL を使うか。
 	//
 	// 使わないアプリに DB とロールを作ると、消し忘れた資源が溜まるうえ
@@ -94,7 +105,10 @@ var (
 	nameRE   = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 	envRE    = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 	secretRE = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
-	dbNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	// 先頭は /。以降はパスに使う文字だけ。空白・引用符・括弧・カンマ・
+	// 円記号は入れない。設定の行やその中の関数呼び出しを閉じられてしまう。
+	redactPathRE = regexp.MustCompile(`^/[A-Za-z0-9._~/-]+$`)
+	dbNameRE     = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 
 // Load は path から読む。ファイルが無い場合は既定値だけの Manifest を返す。
@@ -162,6 +176,16 @@ func (m *Manifest) validate() error {
 	if m.App.DatabaseName != "" && !dbNameRE.MatchString(m.App.DatabaseName) {
 		// DB 名は SQL とファイルパスの両方に現れる。
 		return fmt.Errorf("DB 名に使えない文字が含まれています: %q", m.App.DatabaseName)
+	}
+	for _, p := range m.App.RedactPaths {
+		// この文字列は HAProxy の設定へ正規表現として埋め込まれる。緩めると
+		// 設定そのものを書き換えられる。パスに使う文字だけに絞る。
+		//
+		// . は正規表現では任意の 1 文字になるが、広く一致する方へ倒れるので
+		// 伏せ漏れにはならない。
+		if !redactPathRE.MatchString(p) {
+			return fmt.Errorf("redactPaths に使えない文字が含まれています: %q", p)
+		}
 	}
 	for env, v := range m.App.Env {
 		if !envRE.MatchString(env) {
