@@ -1,6 +1,7 @@
 package render
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -401,6 +402,52 @@ func TestHAProxyLogsToStdoutBecauseThereIsNoDevLogInAContainer(t *testing.T) {
 	}
 	if !strings.Contains(got, "log stdout") {
 		t.Fatalf("標準出力へ出していない:\n%s", got)
+	}
+}
+
+// パスの一部がそのまま資格情報になっている経路がある (StreamerPost の
+// /api/sse/widget/:token、FighterNotes の /s/:id)。要求行を残すとそれが
+// journald に平文で積まれる。実際に積まれていた。
+//
+// yunirun はアプリの中身を知らないので、どの経路が秘密を含むかを判別
+// できない。判別できない以上、既定は「残さない」しかない。
+func TestHAProxyDoesNotLogTheRequestPath(t *testing.T) {
+	got := HAProxy(nil)
+	// option httplog は要求行 (%{+Q}r) を含む。これがあると素通しになる。
+	if strings.Contains(got, "option httplog") {
+		t.Fatalf("要求行を含む既定の形式を使っている:\n%s", got)
+	}
+	if !strings.Contains(got, "log-format") {
+		t.Fatalf("記録の形を決めていない:\n%s", got)
+	}
+	// URI を出す指定が入っていないこと。
+	//
+	// %r (要求行そのもの) は、後ろに別の字が続く %rc などと紛れるので
+	// 単独で現れる場合だけを見る。
+	for _, bad := range []string{"%HU", "%HP", "%HQ", "%{+Q}r"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("経路を出す指定 %s が入っている", bad)
+		}
+	}
+	if regexp.MustCompile(`%r([^a-zA-Z]|$)`).MatchString(got) {
+		t.Error("要求行 (%r) が入っている")
+	}
+}
+
+// 手段まで失うと、アプリへ届かなかった要求 (503 や時間切れ) を追えなくなる。
+func TestHAProxyStillLogsWhatIsNeededToDiagnose(t *testing.T) {
+	got := HAProxy(nil)
+	for name, v := range map[string]string{
+		"どのアプリか":   "%ft",
+		"どの系へ振ったか": "%b/%s",
+		"状態":       "%ST",
+		"所要時間":     "%Ta",
+		"切れ方":      "%tsc",
+		"方法":       "%HM",
+	} {
+		if !strings.Contains(got, v) {
+			t.Errorf("%s (%s) が残っていない", name, v)
+		}
 	}
 }
 

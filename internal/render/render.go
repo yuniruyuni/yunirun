@@ -141,7 +141,22 @@ func HAProxy(apps []App) string {
 	p("defaults")
 	p("  mode http")
 	p("  log global")
-	p("  option httplog")
+	// 要求行 (パス) を残さない。
+	//
+	// パスの一部がそのまま資格情報になっている経路がある。StreamerPost の
+	// /api/sse/widget/:token と FighterNotes の /s/:id がそうで、実際に
+	// journald へ書かれていた。yunirun はアプリの中身を知らないので、
+	// どの経路が秘密を含むかを判別できない。判別できない以上、既定は
+	// 「残さない」にするしかない。
+	//
+	// 手段を失うわけではない。アプリ側が自分で要求を記録しており、そちらは
+	// 何が秘密かを知ったうえで伏せている。ここでしか分からないのは
+	// アプリへ届かなかった要求 (503 や時間切れ) で、それはどのアプリかが
+	// 分かれば足りる。frontend と backend の名前は残している。
+	//
+	// option httplog の既定から要求行だけを外した形。%HM は方法のみ。
+	// % は書式指定として解釈されるので、値として渡す。
+	p("%s", `  log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %HM"`)
 	p("  timeout connect 5s")
 	p("  timeout client  60s")
 	p("  timeout server  60s")
