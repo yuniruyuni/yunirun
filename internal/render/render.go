@@ -127,6 +127,22 @@ func ContainerUnit(a App, color string) string {
 	return b.String()
 }
 
+// logPathRule は記録用の経路を組み立てる規則を返す。
+//
+// 宣言された接頭辞の先を * に置き換える。宣言が無ければパスをそのまま置く。
+// 置かないと記録が - になり、どこへ届いたかが分からなくなる。
+func logPathRule(a App) string {
+	expr := "path"
+	if a.Manifest != nil {
+		for _, prefix := range a.Manifest.App.RedactPaths {
+			// .+ にしてあるのは、接頭辞そのものへの要求 (先が空) は
+			// 伏せる必要が無いため。伏せると何も残らない。
+			expr += fmt.Sprintf(",regsub(^%s.+$,%s*)", prefix, prefix)
+		}
+	}
+	return "http-request set-var(txn.path) " + expr
+}
+
 // HAProxy は全アプリ分の設定を組み立てる。
 func HAProxy(apps []App) string {
 	var b strings.Builder
@@ -141,22 +157,18 @@ func HAProxy(apps []App) string {
 	p("defaults")
 	p("  mode http")
 	p("  log global")
-	// 要求行 (パス) を残さない。
+	// 記録する経路は、アプリが宣言した接頭辞の先だけを伏せたもの。
 	//
-	// パスの一部がそのまま資格情報になっている経路がある。StreamerPost の
-	// /api/sse/widget/:token と FighterNotes の /s/:id がそうで、実際に
-	// journald へ書かれていた。yunirun はアプリの中身を知らないので、
-	// どの経路が秘密を含むかを判別できない。判別できない以上、既定は
-	// 「残さない」にするしかない。
+	// option httplog は要求行をそのまま残す。パスの一部がそのまま資格情報に
+	// なっている経路があり (URL を知っていることが唯一のアクセス制御)、
+	// それが journald へ平文で積まれていた。
 	//
-	// 手段を失うわけではない。アプリ側が自分で要求を記録しており、そちらは
-	// 何が秘密かを知ったうえで伏せている。ここでしか分からないのは
-	// アプリへ届かなかった要求 (503 や時間切れ) で、それはどのアプリかが
-	// 分かれば足りる。frontend と backend の名前は残している。
+	// かといって経路ごと落とすと、どこへ届いたのかが全く分からなくなる。
+	// 要求ログを持たないアプリでは、ここが唯一の情報源になる。
 	//
-	// option httplog の既定から要求行だけを外した形。%HM は方法のみ。
-	// % は書式指定として解釈されるので、値として渡す。
-	p("%s", `  log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %HM"`)
+	// 経路 (HAProxy) は生のパスしか見えず、どこが秘密かを知る手立てが無い。
+	// そこでアプリに宣言させ、宣言された所だけを伏せる。
+	p("%s", `  log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %HM %[var(txn.path)]"`)
 	p("  timeout connect 5s")
 	p("  timeout client  60s")
 	p("  timeout server  60s")
@@ -169,6 +181,8 @@ func HAProxy(apps []App) string {
 	p("")
 	p("frontend yunirun_metrics")
 	p("  bind 127.0.0.1:%d", MetricsPort)
+	// 変数を置かないと記録が - になる。ここに秘密は来ない。
+	p("%s", "  http-request set-var(txn.path) path")
 	p("  http-request use-service prometheus-exporter if { path /metrics }")
 	// 他のパスは何も返さない。ここは計測専用の口で、アプリへは繋がない。
 	p("  http-request return status 404")
@@ -198,6 +212,7 @@ func HAProxy(apps []App) string {
 		// と警告する。接尾辞で分ける。
 		p("frontend %s_in", a.Name)
 		p("  bind 127.0.0.1:%d", a.Alloc.Frontend)
+		p("%s", "  "+logPathRule(a))
 		p("  default_backend %s_out", a.Name)
 		p("")
 		p("backend %s_out", a.Name)
