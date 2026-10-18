@@ -1,0 +1,56 @@
+# 依存の既知脆弱性チェック (govulncheck)。
+#
+# govulncheck は呼び出し経路まで見るので、依存だけでなくコードの変更でも
+# 結果が変わる。Go のソースか依存を変えた push / PR に加えて、何も変えて
+# いなくても新しく公開された advisory を拾えるよう週 1 で回す。
+#
+# 標準ライブラリは「最新の安定版 Go」に対して検査している。配備される
+# バイナリの標準ライブラリは nix/package.nix の buildGoModule、つまり
+# 取り込む側 (infra) の nixpkgs が決めるので、ここでは見ていない。
+name: Vulnerability audit
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/security.yml"
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/security.yml"
+  schedule:
+    - cron: "47 18 * * 1"
+  workflow_dispatch:
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
