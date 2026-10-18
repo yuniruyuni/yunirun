@@ -3,7 +3,7 @@ module github.com/yuniruyuni/yunirun
 go 1.25.0
 
 require (
-	filippo.io/age v1.3.1
+	filippo.io/age v1.3.2
 	github.com/tidwall/jsonc v0.3.3
 )
 
