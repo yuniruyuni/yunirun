@@ -95,11 +95,31 @@ func asUser(uid int, cmd ...string) []string {
 		"--uid", strconv.Itoa(uid),
 		"--setenv", "XDG_RUNTIME_DIR=/run/user/" + strconv.Itoa(uid),
 	}
-	if p := os.Getenv("PATH"); p != "" {
+	if p := userPath(os.Getenv("PATH")); p != "" {
 		args = append(args, "--setenv", "PATH="+p)
 	}
 	args = append(args, "--pipe", "--wait", "--quiet", "--collect")
 	return append(args, cmd...)
+}
+
+// setuidWrappers は NixOS が setuid の newuidmap/newgidmap を置く場所。
+const setuidWrappers = "/run/wrappers/bin"
+
+// userPath はアプリのユーザとして podman を動かすときの PATH を作る。
+//
+// setuid の wrapper を先頭に置く。converge の PATH には shadow の
+// パッケージそのもの (useradd のため) が wrapper より前にあり、そのまま
+// 渡すと podman は setuid の付いていない newuidmap を拾って
+// "write to uid_map failed: Operation not permitted" で失敗する (VM の e2e で
+// 踏んだ)。NixOS 以外では wrapper の場所が無いので何もしない。
+func userPath(path string) string {
+	if _, err := os.Stat(setuidWrappers); err != nil {
+		return path
+	}
+	if path == "" {
+		return setuidWrappers
+	}
+	return setuidWrappers + ":" + path
 }
 
 // ProbeUserNamespace はアプリのユーザの podman が使う名前空間の写像を読む。

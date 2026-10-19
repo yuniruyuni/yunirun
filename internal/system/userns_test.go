@@ -231,3 +231,18 @@ func TestEnsureSubIDsReportsChange(t *testing.T) {
 		}
 	}
 }
+
+func TestUserPathPutsSetuidWrappersFirst(t *testing.T) {
+	if _, err := os.Stat(setuidWrappers); err != nil {
+		// NixOS 以外では変えない。
+		if got := userPath("/usr/bin"); got != "/usr/bin" {
+			t.Fatalf("%q", got)
+		}
+		return
+	}
+	// shadow のパッケージが wrapper より前にあると setuid の無い newuidmap を拾う。
+	got := userPath("/nix/store/x-shadow/bin:/run/wrappers/bin")
+	if !strings.HasPrefix(got, setuidWrappers+":") {
+		t.Fatalf("wrapper が先頭に無い: %q", got)
+	}
+}
