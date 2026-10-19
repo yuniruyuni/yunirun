@@ -193,7 +193,7 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 	if err := system.EnsureUser(ctx, r, user, a, home); err != nil {
 		return render.App{}, err
 	}
-	if err := system.EnsureSubIDs(user, a); err != nil {
+	if _, err := system.EnsureSubIDs(user, a); err != nil {
 		return render.App{}, err
 	}
 	if err := system.EnsureLinger(ctx, r, user); err != nil {
@@ -358,6 +358,15 @@ func convergeApp(ctx context.Context, r system.Runner, cfg *config.Config,
 		return render.App{}, err
 	}
 	if err := system.ReloadUserUnits(ctx, r, user, a.UID); err != nil {
+		return render.App{}, err
+	}
+	// /etc/subuid に行があっても、podman が既に作った名前空間がそれを
+	// 使っているとは限らない。行が欠けていた間に作られた名前空間は、行を
+	// 戻しても uid 1 個だけの写像のまま残り、非 root の image を展開できない
+	// (再起動後に本番で踏んだ)。ここで実際の写像を見て、欠けていれば作り直す。
+	//
+	// deploy は最初に converge を通すので、image を取得する前にもここを通る。
+	if _, err := system.EnsureUserNamespace(ctx, r, user, a); err != nil {
 		return render.App{}, err
 	}
 	// ファイルを置いて daemon-reload しただけでは timer は動かない。

@@ -135,6 +135,19 @@ private リポジトリでも認証情報を置かずに済む。
   たびに増え続けていた (実測で 1 アプリ 47 個 4.2GB、root 側 107 個 40GB、
   うち 93% が未使用)。新しい 3 世代を残して消す。片付けるのは healthy を
   待った後で、戻り先を先に消さない
+- **subuid/subgid は activation の中で戻す。** NixOS の activation は
+  `/etc/subuid` を宣言から作り直し、yunirun が足した行を消す。converge が
+  後から戻す形にしていたところ、ホストの再起動で converge より先にユーザの
+  unit が起動し、podman が行の無い状態でユーザ名前空間を作った。名前空間は
+  作った時点の写像のまま残るので、行が戻った後も非 root の image (uid 65532
+  など) が展開できなかった。モジュールは activation の `users` の直後に
+  `yunirun subids` を走らせて台帳どおりの行を戻す。番号は台帳が持ち評価時に
+  読めないので、`users.users.<name>.subUidRanges` では宣言しない
+- **名前空間は実物を見る。** converge はアプリごとに
+  `podman unshare cat /proc/self/uid_map` で実際の写像を読み、割り当てた範囲が
+  張られていなければ `podman system migrate` で作り直してユーザの
+  インスタンスを入れ直す。`yunirun doctor` も同じものを検査する。`/etc/subuid`
+  に行があることは、podman がそれを使っていることを意味しない
 - **生成物は決定的。** 内容が同じなら毎回同じ文字列になる。そうでないと
   converge のたびに unit が書き換わり無用な再起動を招く
 

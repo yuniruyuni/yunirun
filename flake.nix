@@ -35,6 +35,10 @@
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
           inherit self;
         };
+        userns = import ./nix/tests/userns.nix {
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+          inherit self;
+        };
       };
 
       devShells = forAll (pkgs: {

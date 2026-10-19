@@ -3,7 +3,7 @@
 # yunirun 自体は NixOS に依存しない。ここでやるのは
 #   - バイナリの設置
 #   - 取り込むリポジトリ一覧の書き出し
-#   - activation のあとに converge を走らせる
+#   - activation の中で subuid/subgid を戻し、その後に converge を走らせる
 #   - migration を root 側で実行するための unit と、それを起動するための
 #     narrow な sudo ルール
 #   - opkssh の認可 (取り込み一覧と一対一)
@@ -288,10 +288,36 @@ in
     environment.systemPackages = [ cfg.package pkgs.age pkgs.podman ];
     environment.etc."yunirun/config.json".source = configFile;
 
+    # activation の中で subuid/subgid を戻す。
+    #
+    # NixOS の activation (users) は /etc/subuid と /etc/subgid を
+    # users.users の宣言から作り直し、yunirun が imperative に足した行を
+    # 消す。以前はこれを converge が後から戻していたが、ホストの再起動では
+    # converge より先に linger のユーザの unit が起動し、podman が行の無い
+    # 状態でユーザ名前空間を作った。行が戻った後もその名前空間が使われ続け、
+    # 非 root の image (distroless nonroot の uid 65532 や nginx) を展開
+    # できずにアプリが落ちた。
+    #
+    # users の直後に戻せば、欠けた状態は activation の内側にしか存在しない。
+    # 起動時の activation は systemd より前に走るので、ユーザの unit から
+    # 見えることは無い。switch でも欠けるのは数ミリ秒で、その間に作られた
+    # 名前空間は converge (EnsureUserNamespace) が作り直す。
+    #
+    # users.users.<app>.subUidRanges で宣言する形にはしない。番号は名前から
+    # 導けず (台帳が持つ。追加順で決まり、名前順ではない)、評価時には
+    # 読めない。ユーザごと宣言すると NixOS が uid を割り当て、宣言から
+    # 外したときにユーザを消すので、台帳・rename・remove と食い違う。
+    #
+    # 設定は store のパスを直接渡す。/etc の配置 (etc) より前に走っても読める。
+    system.activationScripts.yunirun-subids = lib.stringAfter [ "users" "groups" ] ''
+      ${cfg.package}/bin/yunirun subids --config ${configFile}
+    '';
+
     # activation のあとに収束させる。
     #
-    # activation の後でなければならないのは、NixOS が /etc/subuid を宣言から
-    # 再生成して yunirun が足した行を消すため。ここで復元する。
+    # subuid/subgid の行は上の activation で戻っている。converge も同じ行を
+    # 確かめたうえで、podman が実際に使っている名前空間に割り当てた範囲が
+    # 張られているかを見て、欠けていれば podman system migrate で作り直す。
     systemd.services.yunirun-converge = {
       description = "yunirun: 宣言されたアプリ一覧に実体を一致させる";
       wantedBy = [ "multi-user.target" ];

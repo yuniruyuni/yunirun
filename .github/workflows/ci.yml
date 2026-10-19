@@ -53,3 +53,6 @@ jobs:
 
       - name: DB と権限分離の e2e
         run: nix build .#checks.x86_64-linux.database -L
+
+      - name: 非 root image と再起動・activation の e2e
+        run: nix build .#checks.x86_64-linux.userns -L

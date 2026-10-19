@@ -88,29 +88,46 @@ func ensureGroup(ctx context.Context, r Runner, name string, gid int) error {
 	return nil
 }
 
-// EnsureSubIDs は rootless podman が使う subuid/subgid を収束させる。
-//
-// NixOS の activation がこのファイルを宣言から再生成するため、yunirun が
-// 足した行は rebuild で消える。converge を activation の後に走らせて
-// 復元する前提にしてある。
-func EnsureSubIDs(name string, a alloc.Alloc) error {
-	line := fmt.Sprintf("%s:%d:%d", name, a.SubUID, alloc.SubUIDSize)
-	for _, p := range []string{"/etc/subuid", "/etc/subgid"} {
-		if err := appendLineIfMissing(p, line); err != nil {
-			return err
-		}
-	}
-	return nil
+// SubIDFiles は subuid/subgid の置き場所。テストから差し替えられるよう var にしてある。
+var SubIDFiles = []string{"/etc/subuid", "/etc/subgid"}
+
+// SubIDLine は /etc/subuid (subgid) に置く 1 行を返す。
+func SubIDLine(name string, a alloc.Alloc) string {
+	return fmt.Sprintf("%s:%d:%d", name, a.SubUID, alloc.SubUIDSize)
 }
 
-func appendLineIfMissing(path, line string) error {
+// EnsureSubIDs は rootless podman が使う subuid/subgid を収束させる。
+// 書き換えたときは true を返す。
+//
+// NixOS の activation がこのファイルを宣言から再生成するため、yunirun が
+// 足した行は activation のたびに消える。NixOS モジュールは activation の
+// 中で users の直後に yunirun subids を走らせて即座に戻す (起動時の activation は
+// systemd より前に走るので、ユーザの unit が欠けた状態を見ることは無い)。
+// converge もここを通るので、NixOS 以外のホストでも同じように収束する。
+//
+// 行を戻しても、欠けている間に作られた podman の名前空間は直らない。それは
+// EnsureUserNamespace が見る。
+func EnsureSubIDs(name string, a alloc.Alloc) (bool, error) {
+	line := SubIDLine(name, a)
+	changed := false
+	for _, p := range SubIDFiles {
+		c, err := appendLineIfMissing(p, line)
+		if err != nil {
+			return changed, err
+		}
+		changed = changed || c
+	}
+	return changed, nil
+}
+
+func appendLineIfMissing(path, line string) (bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 	for _, l := range strings.Split(string(b), "\n") {
 		if strings.TrimSpace(l) == line {
-			return nil
+			return false, nil
 		}
 	}
 	// 同じユーザの古い行が残っていると podman が困るので、先頭一致で除く。
@@ -123,7 +140,19 @@ func appendLineIfMissing(path, line string) error {
 		kept = append(kept, l)
 	}
 	kept = append(kept, line)
-	return os.WriteFile(path, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+	// 一時ファイルから rename で置き換える。activation と converge が同時に
+	// 書いても、半端な内容を newuidmap に読ませない。
+	tmp := path + ".yunirun.tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(kept, "\n")+"\n"), 0o644); err != nil {
+		return false, err
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // EnsureLinger はログインセッションが無くてもユーザのサービスが動くようにする。

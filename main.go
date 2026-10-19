@@ -30,6 +30,8 @@ func main() {
 		err = runDeploy(ctx, os.Args[2:])
 	case "migrate":
 		err = runMigrate(ctx, os.Args[2:])
+	case "subids":
+		err = runSubIDs(ctx, os.Args[2:])
 	case "doctor":
 		err = runDoctor(ctx, os.Args[2:])
 	case "rename":
@@ -81,6 +83,11 @@ func usage() {
   yunirun migrate <app>
       schema を適用する。root で実行する。owner ロール (DDL) を使うため、
       deploy ユーザには実行させず systemd 経由で起動される。
+
+  yunirun subids [--config PATH]
+      台帳にあるアプリのユーザの subuid/subgid を /etc/subuid, /etc/subgid に
+      戻す。root で実行する。NixOS の activation が呼ぶ (activation は
+      このファイルを宣言から再生成し、yunirun の行を消すため)。
 
   yunirun doctor [--app NAME] [--list]
       yunirun が置いている前提が今の環境で成り立っているか確かめる。
