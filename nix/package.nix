@@ -10,7 +10,7 @@ buildGoModule (finalAttrs: {
 
   src = lib.cleanSource ../.;
 
-  vendorHash = "sha256-EkP2Y123jE8CUxYv3IQNy1uxedRhShQPmLC2P9pKHoU=";
+  vendorHash = "sha256-0u3k/I6RVw0iCcu3rzQfN5MbFsmWVmrzFkMad+QJkVA=";
 
   ldflags = [
     "-s"
