@@ -106,7 +106,15 @@ pkgs.testers.runNixOSTest {
     LINE = f"yunirun-alpha:{SUBUID}:65536"
     BLUE = 8101
 
-    machine.wait_for_unit("yunirun-converge.service")
+    def wait_converge(m):
+        # 落ちた理由は journal にしか出ない (コンソールへは流していない)。
+        try:
+            m.wait_for_unit("yunirun-converge.service")
+        except Exception:
+            m.execute("journalctl -u yunirun-converge.service -b --no-pager | tail -60 >&2")
+            raise
+
+    wait_converge(machine)
     UID = machine.succeed("id -u yunirun-alpha").strip()
     PAUSE = f"/run/user/{UID}/libpod/tmp/pause.pid"
 
@@ -189,7 +197,7 @@ pkgs.testers.runNixOSTest {
     with subtest("再起動を跨いで動き続ける"):
         machine.shutdown()
         machine.start()
-        machine.wait_for_unit("yunirun-converge.service")
+        wait_converge(machine)
         machine.succeed(f"grep -qx {LINE} /etc/subuid")
         serving()
         # 起動時の activation で行が戻っているので、converge が作り直す
