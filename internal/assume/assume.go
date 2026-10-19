@@ -17,6 +17,9 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"github.com/yuniruyuni/yunirun/internal/alloc"
+	"github.com/yuniruyuni/yunirun/internal/system"
 )
 
 // Assumption は 1 つの前提。
@@ -38,6 +41,21 @@ type Env struct {
 	Run func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// UID は検査対象のアプリユーザ。0 なら未指定。
 	UID int
+	// Apps は検査対象のアプリ。root で実行し台帳を読めたときだけ埋まる。
+	// --app を付けたときはそのアプリだけになる。
+	Apps []App
+	// Namespace はアプリのユーザの podman が実際に使っている名前空間を読む。
+	// nil なら名前空間の検査をしない。
+	Namespace func(ctx context.Context, uid int) (system.UserNamespace, error)
+	// SubIDFiles は /etc/subuid と /etc/subgid。テストから差し替える。
+	SubIDFiles []string
+}
+
+// App は検査対象のアプリ 1 つ。
+type App struct {
+	// User は Linux ユーザ名 (yunirun-<name>)。
+	User  string
+	Alloc alloc.Alloc
 }
 
 // All は yunirun が置いているすべての前提。

@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/yuniruyuni/yunirun/internal/alloc"
+	"github.com/yuniruyuni/yunirun/internal/system"
 )
 
 // assumptions は yunirun が依存している外部環境の性質。
@@ -295,13 +298,42 @@ var assumptions = []Assumption{
 	{
 		ID:   "nixos/subuid-is-regenerated-on-activation",
 		What: "NixOS の activation は /etc/subuid を宣言から再生成する",
-		Why: "yunirun が足した行が rebuild で消える。activation の後に converge を" +
-			"走らせて復元する必要がある。",
+		Why: "yunirun が足した行が activation のたびに消える。起動時も同じで、" +
+			"converge が後から戻すまでの間にユーザの unit が起動すると、podman が" +
+			"行の無い状態で名前空間を作る (本番で踏んだ)。モジュールは activation の中で " +
+			"users の直後に yunirun subids を走らせて即座に戻す。",
 		Check: func(ctx context.Context, env Env) error {
+			files := env.SubIDFiles
+			if files == nil {
+				files = system.SubIDFiles
+			}
+			if len(env.Apps) > 0 {
+				// 台帳を読めているときは、割り当てどおりの行があるかを見る。
+				var missing []string
+				for _, p := range files {
+					b, err := os.ReadFile(p)
+					if err != nil {
+						return fmt.Errorf("%s を読めない: %w", p, err)
+					}
+					have := map[string]bool{}
+					for _, l := range strings.Split(string(b), "\n") {
+						have[strings.TrimSpace(l)] = true
+					}
+					for _, a := range env.Apps {
+						if line := system.SubIDLine(a.User, a.Alloc); !have[line] {
+							missing = append(missing, p+": "+line)
+						}
+					}
+				}
+				if len(missing) > 0 {
+					return fmt.Errorf("割り当てた行が無い: %s", strings.Join(missing, ", "))
+				}
+				return nil
+			}
 			if env.UID == 0 {
 				return nil
 			}
-			b, err := os.ReadFile("/etc/subuid")
+			b, err := os.ReadFile(files[0])
 			if err != nil {
 				return nil
 			}
@@ -312,6 +344,39 @@ var assumptions = []Assumption{
 				}
 			}
 			return fmt.Errorf("yunirun のユーザの subuid が消えている")
+		},
+	},
+	{
+		ID:   "podman/user-namespace-is-fixed-when-created",
+		What: "rootless podman のユーザ名前空間は、作った時点の /etc/subuid のまま変わらない",
+		Why: "再起動直後に /etc/subuid の行が欠けた状態で podman が名前空間 (pause " +
+			"プロセス) を作り、行が戻った後も uid 1 個だけの写像を使い続けた。" +
+			"root の image は動くが、非 root (uid 65532 など) の image は " +
+			"\"insufficient UIDs or GIDs available in user namespace\" で展開できない。" +
+			"/etc/subuid の行を見る検査はすべて通っていたので、実際の写像を見る。" +
+			"直すには podman system migrate (converge が行う)。",
+		Check: func(ctx context.Context, env Env) error {
+			if env.Namespace == nil {
+				return nil
+			}
+			var bad []string
+			for _, a := range env.Apps {
+				ns, err := env.Namespace(ctx, a.Alloc.UID)
+				if err != nil {
+					bad = append(bad, fmt.Sprintf("%s: %v", a.User, err))
+					continue
+				}
+				if ns.Stale(a.Alloc) {
+					bad = append(bad, fmt.Sprintf(
+						"%s: 名前空間に subuid %d:%d が張られていない (uid_map=%v gid_map=%v)",
+						a.User, a.Alloc.SubUID, alloc.SubUIDSize, ns.UIDMap, ns.GIDMap))
+				}
+			}
+			if len(bad) > 0 {
+				return fmt.Errorf("%s。yunirun converge で作り直せる",
+					strings.Join(bad, "; "))
+			}
+			return nil
 		},
 	},
 	{

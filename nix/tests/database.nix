@@ -165,7 +165,15 @@ pkgs.testers.runNixOSTest {
             " exit 1; }"
         )
 
-    machine.wait_for_unit("yunirun-converge.service")
+    def wait_converge(m):
+        # 落ちた理由は journal にしか出ない (コンソールへは流していない)。
+        try:
+            m.wait_for_unit("yunirun-converge.service")
+        except Exception:
+            m.execute("journalctl -u yunirun-converge.service -b --no-pager | tail -60 >&2")
+            raise
+
+    wait_converge(machine)
 
     # アプリ専用 PostgreSQL への接続。owner の資格情報は root しか読めない
     # migration.env にある。ホストの psql からソケット越しに繋ぐ。

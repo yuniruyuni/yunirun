@@ -102,7 +102,15 @@ pkgs.testers.runNixOSTest {
     # 計測用 listener のポート。render.MetricsPort と揃える。
     METRICS = 8098
 
-    machine.wait_for_unit("yunirun-converge.service")
+    def wait_converge(m):
+        # 落ちた理由は journal にしか出ない (コンソールへは流していない)。
+        try:
+            m.wait_for_unit("yunirun-converge.service")
+        except Exception:
+            m.execute("journalctl -u yunirun-converge.service -b --no-pager | tail -60 >&2")
+            raise
+
+    wait_converge(machine)
 
     with subtest("ユーザが作られる"):
         machine.succeed("id yunirun-alpha")

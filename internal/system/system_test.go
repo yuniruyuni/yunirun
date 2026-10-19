@@ -229,15 +229,15 @@ func TestEnsureSubIDsReplacesStaleLineForSameUser(t *testing.T) {
 	dir := t.TempDir()
 	// 実ファイルを差し替えられないので、appendLineIfMissing を直接検証する。
 	p := dir + "/subuid"
-	if err := appendLineIfMissing(p, "app:100:65536"); err != nil {
+	if _, err := appendLineIfMissing(p, "app:100:65536"); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLineIfMissing(p, "other:200:65536"); err != nil {
+	if _, err := appendLineIfMissing(p, "other:200:65536"); err != nil {
 		t.Fatal(err)
 	}
 	// 番号が変わった同じユーザを足すと、古い行は残ってはいけない。
 	// 残ると podman がどちらを使うか不定になる。
-	if err := appendLineIfMissing(p, "app:300:65536"); err != nil {
+	if _, err := appendLineIfMissing(p, "app:300:65536"); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(p)
@@ -253,7 +253,7 @@ func TestEnsureSubIDsReplacesStaleLineForSameUser(t *testing.T) {
 func TestAppendLineIfMissingIsIdempotent(t *testing.T) {
 	p := t.TempDir() + "/subuid"
 	for i := 0; i < 3; i++ {
-		if err := appendLineIfMissing(p, "app:100:65536"); err != nil {
+		if _, err := appendLineIfMissing(p, "app:100:65536"); err != nil {
 			t.Fatal(err)
 		}
 	}
