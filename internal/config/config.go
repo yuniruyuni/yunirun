@@ -230,7 +230,7 @@ func (o Observability) Spec(confDir string) render.StackSpec {
 		PrometheusImage: or(o.PrometheusImage, "docker.io/prom/prometheus:v3.14.0"),
 		LokiImage:       or(o.LokiImage, "docker.io/grafana/loki:3.7.9"),
 		AlloyImage:      or(o.AlloyImage, "docker.io/grafana/alloy:v1.19.0"),
-		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.0"),
+		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.4"),
 		NodeImage:       or(o.NodeImage, "quay.io/prometheus/node-exporter:v1.12.1"),
 		// 3.x ではなく 2.x の最新を使う。3.0 は ingester を live_store +
 		// block_builder に、compactor を backendscheduler + backendworker に
