@@ -228,9 +228,9 @@ func (o Observability) Spec(confDir string) render.StackSpec {
 		// タグを固定する。動くものが勝手に変わると、壊れたときに何が
 		// 変わったのかを追えない。
 		PrometheusImage: or(o.PrometheusImage, "docker.io/prom/prometheus:v3.14.0"),
-		LokiImage:       or(o.LokiImage, "docker.io/grafana/loki:3.7.6"),
+		LokiImage:       or(o.LokiImage, "docker.io/grafana/loki:3.7.9"),
 		AlloyImage:      or(o.AlloyImage, "docker.io/grafana/alloy:v1.19.0"),
-		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.0"),
+		GrafanaImage:    or(o.GrafanaImage, "docker.io/grafana/grafana:13.2.4"),
 		NodeImage:       or(o.NodeImage, "quay.io/prometheus/node-exporter:v1.12.1"),
 		// 3.x ではなく 2.x の最新を使う。3.0 は ingester を live_store +
 		// block_builder に、compactor を backendscheduler + backendworker に
@@ -240,7 +240,7 @@ func (o Observability) Spec(confDir string) render.StackSpec {
 		//
 		// 2.10 系は現役で、3.0.3 と同じ日に同じ Go 更新を受けている。
 		// 実測で定常状態のログ増分は 0 行。
-		TempoImage:   or(o.TempoImage, "docker.io/grafana/tempo:2.10.8"),
+		TempoImage:   or(o.TempoImage, "docker.io/grafana/tempo:2.10.10"),
 		Retention:    or(o.Retention, "30d"),
 		AlertWebhook: o.AlertWebhook,
 	}
