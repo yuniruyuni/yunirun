@@ -1,10 +1,24 @@
 {
   lib,
   buildGoModule,
+  go_1_26,
+  fetchurl,
   versionCheckHook,
 }:
 
-buildGoModule (finalAttrs: {
+let
+  # go.mod's toolchain directive does not select the compiler in a Nix build.
+  # GO-2026-6809 requires the patched crypto/x509 trust store in the binary.
+  securityGo = if lib.versionAtLeast go_1_26.version "1.26.10" then go_1_26 else
+    go_1_26.overrideAttrs (_: {
+      version = "1.26.10";
+      src = fetchurl {
+        url = "https://go.dev/dl/go1.26.10.src.tar.gz";
+        hash = "sha256-/WPog7ovK/ypPBZGsx6+9j4rHk0rMXyXidl2po2B828=";
+      };
+    });
+in
+(buildGoModule.override { go = securityGo; }) (finalAttrs: {
   pname = "yunirun";
   version = "0.1.0";
 
