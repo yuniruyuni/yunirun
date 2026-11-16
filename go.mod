@@ -6,7 +6,7 @@ toolchain go1.27.4
 
 require (
 	filippo.io/age v1.3.2
-	github.com/tidwall/jsonc v0.3.3
+	github.com/tidwall/jsonc v0.3.4
 )
 
 require (
